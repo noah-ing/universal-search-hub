@@ -1,0 +1,108 @@
+{
+    "compilerOptions": {
+      /* Base Options */
+      "target": "ES2020",
+      "module": "commonjs",
+      "lib": ["ES2020", "DOM"],
+      "allowJs": true,
+      "checkJs": false,
+      "jsx": "react",
+      "declaration": true,
+      "declarationMap": true,
+      "sourceMap": true,
+      "outDir": "./dist",
+      "rootDir": "./src",
+      "composite": false,
+      "tsBuildInfoFile": "./dist/.tsbuildinfo",
+      "removeComments": false,
+      "noEmit": false,
+      "importHelpers": true,
+      "isolatedModules": true,
+      "allowSyntheticDefaultImports": true,
+  
+      /* Strict Type-Checking Options */
+      "strict": true,
+      "noImplicitAny": true,
+      "strictNullChecks": true,
+      "strictFunctionTypes": true,
+      "strictBindCallApply": true,
+      "strictPropertyInitialization": true,
+      "noImplicitThis": true,
+      "useUnknownInCatchVariables": true,
+      "alwaysStrict": true,
+  
+      /* Additional Checks */
+      "noUnusedLocals": true,
+      "noUnusedParameters": true,
+      "noImplicitReturns": true,
+      "noFallthroughCasesInSwitch": true,
+      "noUncheckedIndexedAccess": true,
+      "noImplicitOverride": true,
+      "noPropertyAccessFromIndexSignature": true,
+      "allowUnusedLabels": false,
+      "allowUnreachableCode": false,
+  
+      /* Module Resolution Options */
+      "moduleResolution": "node",
+      "baseUrl": "./src",
+      "paths": {
+        "@/*": ["*"],
+        "@types/*": ["types/*"],
+        "@search/*": ["search/*"],
+        "@consensus/*": ["consensus/*"],
+        "@utils/*": ["utils/*"]
+      },
+      "rootDirs": [],
+      "typeRoots": ["./node_modules/@types", "./src/types"],
+      "types": ["node", "jest", "ws"],
+      "allowUmdGlobalAccess": false,
+      "resolveJsonModule": true,
+      "noResolve": false,
+  
+      /* Source Map Options */
+      "inlineSourceMap": false,
+      "inlineSources": false,
+      "experimentalDecorators": true,
+      "emitDecoratorMetadata": true,
+  
+      /* Advanced Options */
+      "skipLibCheck": true,
+      "forceConsistentCasingInFileNames": true,
+      "pretty": true,
+      "diagnostics": true,
+      "listEmitted": false,
+      "listFiles": false,
+      "traceResolution": false,
+  
+      /* Incremental Build Support */
+      "incremental": true,
+      "assumeChangesOnlyAffectDirectDependencies": false
+    },
+    "include": [
+      "src/**/*",
+      "tests/**/*"
+    ],
+    "exclude": [
+      "node_modules",
+      "dist",
+      "coverage",
+      "docs",
+      "**/*.spec.ts",
+      "**/*.test.ts"
+    ],
+    "references": [],
+    "ts-node": {
+      "transpileOnly": true,
+      "files": true,
+      "compilerOptions": {
+        "module": "commonjs"
+      }
+    },
+    "watchOptions": {
+      "watchFile": "useFsEvents",
+      "watchDirectory": "useFsEvents",
+      "fallbackPolling": "dynamicPriority",
+      "synchronousWatchDirectory": true,
+      "excludeDirectories": ["node_modules", "dist", "coverage", "docs"]
+    }
+  }
