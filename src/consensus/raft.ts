@@ -1,5 +1,3 @@
-// src/consensus/raft.ts
-
 import {
     RaftState,
     LogEntry,
@@ -11,76 +9,57 @@ import {
     MessageType,
     RaftCommand,
     SystemError,
-    ErrorType
+    ErrorType,
+    InstallSnapshot,
+    SnapshotResponse,
+    CommandType,
+    ClusterConfig
 } from '../types';
+import { RaftStorage } from './storage';
+import { raftLogger } from '../utils/logger';
 
 /**
  * Raft Node Implementation
  */
 export class RaftNode {
-    private state: RaftState;
-    private currentTerm: number;
-    private votedFor: string | null;
-    private log: LogEntry[];
-    private commitIndex: number;
-    private lastApplied: number;
-    private nextIndex: Map<string, number>;
-    private matchIndex: Map<string, number>;
-    private readonly nodeId: string;
-    private readonly peers: string[];
-    private leaderId: string | null;
-    private electionTimeout: NodeJS.Timeout | null;
-    private heartbeatInterval: NodeJS.Timeout | null;
-    private lastHeartbeat: number;
-    private config: {
-        heartbeatTimeout: number;
-        electionTimeoutMin: number;
-        electionTimeoutMax: number;
-        batchSize: number;
-    };
-    private messageCallback: (msg: RaftMessage) => void;
-    private commitCallback: (command: RaftCommand) => void;
+    private state: RaftState = RaftState.FOLLOWER;
+    private currentTerm: number = 0;
+    private votedFor: string | null = null;
+    private log: LogEntry[] = [];
+    private commitIndex: number = -1;
+    private lastApplied: number = -1;
+    private nextIndex: Map<string, number> = new Map();
+    private matchIndex: Map<string, number> = new Map();
+    private leaderId: string | null = null;
+    private electionTimeout: NodeJS.Timeout | null = null;
+    private heartbeatInterval: NodeJS.Timeout | null = null;
+    private lastHeartbeat: number = Date.now();
+    private storage: RaftStorage | null = null;
+    private initialized: boolean = false;
+    private clusterConfig: string[];
+    private configChangeInProgress: boolean = false;
+    private lastSnapshotIndex: number = -1;
+    private lastSnapshotTerm: number = 0;
 
     constructor(
-        nodeId: string,
-        peers: string[],
-        config: {
+        private readonly nodeId: string,
+        private readonly peers: string[],
+        private readonly config: {
             heartbeatTimeout: number;
             electionTimeoutMin: number;
             electionTimeoutMax: number;
             batchSize: number;
+            snapshotThreshold: number;
         },
-        messageCallback: (msg: RaftMessage) => void,
-        commitCallback: (command: RaftCommand) => void
+        private readonly messageCallback: (msg: RaftMessage) => void,
+        private readonly commitCallback: (command: RaftCommand) => void
     ) {
-        this.nodeId = nodeId;
-        this.peers = peers;
-        this.config = config;
-        this.messageCallback = messageCallback;
-        this.commitCallback = commitCallback;
-
-        // Initialize Raft state
-        this.state = RaftState.FOLLOWER;
-        this.currentTerm = 0;
-        this.votedFor = null;
-        this.log = [];
-        this.commitIndex = -1;
-        this.lastApplied = -1;
-        this.nextIndex = new Map();
-        this.matchIndex = new Map();
-        this.leaderId = null;
-        this.electionTimeout = null;
-        this.heartbeatInterval = null;
-        this.lastHeartbeat = Date.now();
-
+        this.clusterConfig = [nodeId, ...peers];
         // Initialize peer tracking
         for (const peer of peers) {
             this.nextIndex.set(peer, 0);
             this.matchIndex.set(peer, -1);
         }
-
-        // Start election timeout
-        this.resetElectionTimeout();
     }
 
     /**
@@ -111,11 +90,18 @@ export class RaftNode {
     /**
      * Start leader election
      */
-    private startElection(): void {
+    private async startElection(): Promise<void> {
+        if (!this.initialized) return;
+
         this.state = RaftState.CANDIDATE;
         this.currentTerm++;
         this.votedFor = this.nodeId;
         this.leaderId = null;
+
+        // Persist state changes
+        await this.storage?.saveTerm(this.currentTerm);
+        await this.storage?.saveVotedFor(this.votedFor);
+        await this.storage?.saveState(this.state);
 
         const lastLog = this.log[this.log.length - 1];
         const request: VoteRequest = {
@@ -128,10 +114,7 @@ export class RaftNode {
         };
 
         // Request votes from all peers
-        let votesReceived = 1; // Vote for self
-        const votesNeeded = Math.floor((this.peers.length + 1) / 2) + 1;
-
-        for (const peer of this.peers) {
+        for (const peer of this.clusterConfig.filter(id => id !== this.nodeId)) {
             request.to = peer;
             this.messageCallback(request);
         }
@@ -149,7 +132,7 @@ export class RaftNode {
         }
 
         this.heartbeatInterval = setInterval(() => {
-            for (const peer of this.peers) {
+            for (const peer of this.clusterConfig.filter(id => id !== this.nodeId)) {
                 this.sendAppendEntries(peer);
             }
         }, this.config.heartbeatTimeout);
@@ -159,6 +142,8 @@ export class RaftNode {
      * Send AppendEntries RPC to a peer
      */
     private sendAppendEntries(peerId: string): void {
+        if (!this.initialized) return;
+
         const nextIdx = this.nextIndex.get(peerId)!;
         const prevLogIndex = nextIdx - 1;
         const prevLog = this.log[prevLogIndex];
@@ -182,48 +167,9 @@ export class RaftNode {
     }
 
     /**
-     * Apply committed entries to state machine
-     */
-    private applyCommitted(): void {
-        while (this.lastApplied < this.commitIndex) {
-            this.lastApplied++;
-            const entry = this.log[this.lastApplied];
-            this.commitCallback(entry.command);
-        }
-    }
-
-    /**
-     * Handle incoming RaftMessage
-     */
-    public handleMessage(message: RaftMessage): void {
-        // Update term if necessary
-        if (message.term > this.currentTerm) {
-            this.currentTerm = message.term;
-            this.state = RaftState.FOLLOWER;
-            this.votedFor = null;
-            this.leaderId = null;
-        }
-
-        switch (message.type) {
-            case MessageType.VOTE_REQUEST:
-                this.handleVoteRequest(message as VoteRequest);
-                break;
-            case MessageType.VOTE_RESPONSE:
-                this.handleVoteResponse(message as VoteResponse);
-                break;
-            case MessageType.APPEND_ENTRIES:
-                this.handleAppendEntries(message as AppendEntries);
-                break;
-            case MessageType.APPEND_RESPONSE:
-                this.handleAppendResponse(message as AppendResponse);
-                break;
-        }
-    }
-
-    /**
      * Handle VoteRequest RPC
      */
-    private handleVoteRequest(request: VoteRequest): void {
+    private async handleVoteRequest(request: VoteRequest): Promise<void> {
         const response: VoteResponse = {
             type: MessageType.VOTE_RESPONSE,
             term: this.currentTerm,
@@ -250,6 +196,9 @@ export class RaftNode {
             this.votedFor = request.from;
             response.granted = true;
             this.resetElectionTimeout();
+
+            // Persist vote
+            await this.storage?.saveVotedFor(this.votedFor);
         }
 
         this.messageCallback(response);
@@ -258,7 +207,7 @@ export class RaftNode {
     /**
      * Handle VoteResponse RPC
      */
-    private handleVoteResponse(response: VoteResponse): void {
+    private async handleVoteResponse(response: VoteResponse): Promise<void> {
         if (
             this.state !== RaftState.CANDIDATE ||
             response.term < this.currentTerm
@@ -274,9 +223,9 @@ export class RaftNode {
                 }
             }
 
-            const votesNeeded = Math.floor((this.peers.length + 1) / 2) + 1;
+            const votesNeeded = Math.floor((this.clusterConfig.length) / 2) + 1;
             if (votesReceived >= votesNeeded) {
-                this.becomeLeader();
+                await this.becomeLeader();
             }
         }
     }
@@ -284,7 +233,7 @@ export class RaftNode {
     /**
      * Handle AppendEntries RPC
      */
-    private handleAppendEntries(request: AppendEntries): void {
+    private async handleAppendEntries(request: AppendEntries): Promise<void> {
         const response: AppendResponse = {
             type: MessageType.APPEND_RESPONSE,
             term: this.currentTerm,
@@ -301,6 +250,9 @@ export class RaftNode {
         this.resetElectionTimeout();
         this.leaderId = request.from;
         this.state = RaftState.FOLLOWER;
+
+        // Persist state
+        await this.storage?.saveState(this.state);
 
         // Check if log contains an entry at prevLogIndex with prevLogTerm
         if (
@@ -329,8 +281,14 @@ export class RaftNode {
         // Remove conflicting entries and append new ones
         if (conflictIndex !== -1) {
             this.log = this.log.slice(0, conflictIndex);
+            await this.storage?.deleteLogEntriesFrom(conflictIndex);
         }
-        this.log = this.log.concat(newEntries);
+
+        // Append new entries
+        if (newEntries.length > 0) {
+            this.log = this.log.concat(newEntries);
+            await this.storage?.appendLogEntries(newEntries);
+        }
 
         // Update commit index
         if (request.leaderCommit > this.commitIndex) {
@@ -338,7 +296,7 @@ export class RaftNode {
                 request.leaderCommit,
                 this.log.length - 1
             );
-            this.applyCommitted();
+            await this.applyCommitted();
         }
 
         response.success = true;
@@ -349,7 +307,7 @@ export class RaftNode {
     /**
      * Handle AppendResponse RPC
      */
-    private handleAppendResponse(response: AppendResponse): void {
+    private async handleAppendResponse(response: AppendResponse): Promise<void> {
         if (
             this.state !== RaftState.LEADER ||
             response.term < this.currentTerm
@@ -369,7 +327,7 @@ export class RaftNode {
                 .sort((a, b) => b - a);
             
             const majorityIndex = matchIndexes[
-                Math.floor((this.peers.length + 1) / 2)
+                Math.floor(this.clusterConfig.length / 2)
             ];
 
             if (
@@ -377,7 +335,7 @@ export class RaftNode {
                 this.log[majorityIndex].term === this.currentTerm
             ) {
                 this.commitIndex = majorityIndex;
-                this.applyCommitted();
+                await this.applyCommitted();
             }
         } else {
             // Decrement nextIndex and retry
@@ -388,15 +346,233 @@ export class RaftNode {
     }
 
     /**
+     * Handle InstallSnapshot RPC
+     */
+    private async handleInstallSnapshot(request: InstallSnapshot): Promise<void> {
+        if (!this.storage) return;
+
+        const response: SnapshotResponse = {
+            type: MessageType.SNAPSHOT_RESPONSE,
+            term: this.currentTerm,
+            from: this.nodeId,
+            to: request.from,
+            success: false
+        };
+
+        if (request.term < this.currentTerm) {
+            this.messageCallback(response);
+            return;
+        }
+
+        this.resetElectionTimeout();
+        this.leaderId = request.from;
+        this.state = RaftState.FOLLOWER;
+
+        try {
+            if (request.lastIncludedIndex > this.lastSnapshotIndex) {
+                // Save snapshot
+                await this.storage.createSnapshot(
+                    request.lastIncludedIndex,
+                    request.lastIncludedTerm,
+                    request.data,
+                    this.clusterConfig
+                );
+
+                this.lastSnapshotIndex = request.lastIncludedIndex;
+                this.lastSnapshotTerm = request.lastIncludedTerm;
+
+                // Update log
+                this.log = this.log.filter(entry => entry.index > request.lastIncludedIndex);
+
+                // Apply snapshot
+                await this.commitCallback({
+                    type: CommandType.CHANGE_CONFIG,
+                    data: { config: this.clusterConfig }
+                });
+
+                response.success = true;
+            }
+        } catch (error) {
+            raftLogger.error({
+                nodeId: this.nodeId,
+                error
+            }, 'Failed to install snapshot');
+        }
+
+        this.messageCallback(response);
+    }
+
+    /**
+     * Create and install snapshot
+     */
+    private async createSnapshot(): Promise<void> {
+        if (!this.storage) return;
+
+        const lastEntry = this.log[this.log.length - 1];
+        if (!lastEntry) return;
+
+        try {
+            await this.storage.createSnapshot(
+                lastEntry.index,
+                lastEntry.term,
+                { lastApplied: this.lastApplied },
+                this.clusterConfig
+            );
+
+            this.lastSnapshotIndex = lastEntry.index;
+            this.lastSnapshotTerm = lastEntry.term;
+
+            // Clear log entries up to snapshot
+            this.log = this.log.slice(lastEntry.index + 1);
+
+            raftLogger.info({
+                nodeId: this.nodeId,
+                snapshotIndex: this.lastSnapshotIndex,
+                snapshotTerm: this.lastSnapshotTerm
+            }, 'Created snapshot');
+        } catch (error) {
+            raftLogger.error({
+                nodeId: this.nodeId,
+                error
+            }, 'Failed to create snapshot');
+        }
+    }
+
+    /**
+     * Handle cluster membership changes
+     */
+    private async handleConfigChange(command: RaftCommand): Promise<void> {
+        if (this.configChangeInProgress) {
+            throw new SystemError(
+                ErrorType.CONSENSUS,
+                'CONFIG_CHANGE_IN_PROGRESS',
+                'Another configuration change is in progress'
+            );
+        }
+
+        this.configChangeInProgress = true;
+
+        try {
+            switch (command.type) {
+                case CommandType.ADD_SERVER:
+                    if (command.data.serverId && !this.clusterConfig.includes(command.data.serverId)) {
+                        this.clusterConfig = [...this.clusterConfig, command.data.serverId];
+                        this.nextIndex.set(command.data.serverId, this.log.length);
+                        this.matchIndex.set(command.data.serverId, -1);
+                    }
+                    break;
+
+                case CommandType.REMOVE_SERVER:
+                    if (command.data.serverId && command.data.serverId !== this.nodeId) {
+                        this.clusterConfig = this.clusterConfig.filter(id => id !== command.data.serverId);
+                        this.nextIndex.delete(command.data.serverId);
+                        this.matchIndex.delete(command.data.serverId);
+                    }
+                    break;
+            }
+
+            // Apply configuration change
+            await this.commitCallback({
+                type: CommandType.CHANGE_CONFIG,
+                data: { config: this.clusterConfig }
+            });
+
+            this.configChangeInProgress = false;
+        } catch (error) {
+            this.configChangeInProgress = false;
+            throw error;
+        }
+    }
+
+    /**
+     * Initialize Raft node with storage
+     */
+    public async initialize(storage: RaftStorage): Promise<void> {
+        if (this.initialized) return;
+
+        try {
+            this.storage = storage;
+
+            // Check for existing snapshot
+            const snapshot = await storage.getLatestSnapshot();
+            if (snapshot) {
+                this.lastSnapshotIndex = snapshot.lastIncludedIndex;
+                this.lastSnapshotTerm = snapshot.lastIncludedTerm;
+                this.clusterConfig = snapshot.clusterConfig;
+                // Apply snapshot state
+                await this.commitCallback({
+                    type: CommandType.CHANGE_CONFIG,
+                    data: { config: snapshot.clusterConfig }
+                });
+            }
+
+            // Restore state from storage
+            this.currentTerm = await storage.getTerm();
+            this.votedFor = await storage.getVotedFor();
+            this.state = await storage.getState();
+
+            // Restore log entries
+            const entries = await storage.getLogEntries(0);
+            this.log = entries;
+
+            // Update indices
+            if (entries.length > 0) {
+                this.commitIndex = entries.length - 1;
+                this.lastApplied = entries.length - 1;
+                
+                // Apply all committed entries
+                for (const entry of entries) {
+                    await this.commitCallback(entry.command);
+                }
+            }
+
+            // Start election timeout
+            this.resetElectionTimeout();
+            this.initialized = true;
+
+            raftLogger.info({
+                nodeId: this.nodeId,
+                term: this.currentTerm,
+                state: this.state,
+                logLength: this.log.length
+            }, 'Raft node initialized');
+
+        } catch (error) {
+            throw new SystemError(
+                ErrorType.CONSENSUS,
+                'INIT_FAILED',
+                'Failed to initialize Raft node',
+                error
+            );
+        }
+    }
+
+    /**
+     * Apply committed entries to state machine
+     */
+    private async applyCommitted(): Promise<void> {
+        if (!this.initialized) return;
+
+        while (this.lastApplied < this.commitIndex) {
+            this.lastApplied++;
+            const entry = this.log[this.lastApplied];
+            await this.commitCallback(entry.command);
+        }
+    }
+
+    /**
      * Become leader
      */
-    private becomeLeader(): void {
+    private async becomeLeader(): Promise<void> {
         if (this.state !== RaftState.CANDIDATE) {
             return;
         }
 
         this.state = RaftState.LEADER;
         this.leaderId = this.nodeId;
+
+        // Persist state
+        await this.storage?.saveState(this.state);
 
         // Initialize leader state
         for (const peer of this.peers) {
@@ -415,12 +591,63 @@ export class RaftNode {
         for (const peer of this.peers) {
             this.sendAppendEntries(peer);
         }
+
+        raftLogger.info({
+            nodeId: this.nodeId,
+            term: this.currentTerm
+        }, 'Became leader');
+    }
+
+    /**
+     * Handle incoming RaftMessage
+     */
+    public async handleMessage(message: RaftMessage): Promise<void> {
+        if (!this.initialized) return;
+
+        // Update term if necessary
+        if (message.term > this.currentTerm) {
+            this.currentTerm = message.term;
+            this.state = RaftState.FOLLOWER;
+            this.votedFor = null;
+            this.leaderId = null;
+
+            // Persist state changes
+            await this.storage?.saveTerm(this.currentTerm);
+            await this.storage?.saveVotedFor(null);
+            await this.storage?.saveState(this.state);
+        }
+
+        switch (message.type) {
+            case MessageType.VOTE_REQUEST:
+                await this.handleVoteRequest(message as VoteRequest);
+                break;
+            case MessageType.VOTE_RESPONSE:
+                await this.handleVoteResponse(message as VoteResponse);
+                break;
+            case MessageType.APPEND_ENTRIES:
+                await this.handleAppendEntries(message as AppendEntries);
+                break;
+            case MessageType.APPEND_RESPONSE:
+                await this.handleAppendResponse(message as AppendResponse);
+                break;
+            case MessageType.INSTALL_SNAPSHOT:
+                await this.handleInstallSnapshot(message as InstallSnapshot);
+                break;
+        }
     }
 
     /**
      * Submit command to the cluster
      */
-    public submitCommand(command: RaftCommand): void {
+    public async submitCommand(command: RaftCommand): Promise<void> {
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.CONSENSUS,
+                'NOT_INITIALIZED',
+                'Raft node not initialized'
+            );
+        }
+
         if (this.state !== RaftState.LEADER) {
             throw new SystemError(
                 ErrorType.CONSENSUS,
@@ -429,17 +656,30 @@ export class RaftNode {
             );
         }
 
+        // Handle configuration changes
+        if (command.type === CommandType.ADD_SERVER || command.type === CommandType.REMOVE_SERVER) {
+            await this.handleConfigChange(command);
+        }
+
         const entry: LogEntry = {
             term: this.currentTerm,
             index: this.log.length,
             command
         };
 
+        // Append to log and persist
         this.log.push(entry);
+        await this.storage?.appendLogEntries([entry]);
+
         this.matchIndex.set(this.nodeId, entry.index);
 
+        // Check if we need to create a snapshot
+        if (this.log.length >= this.config.snapshotThreshold) {
+            await this.createSnapshot();
+        }
+
         // Replicate to all peers
-        for (const peer of this.peers) {
+        for (const peer of this.clusterConfig.filter(id => id !== this.nodeId)) {
             this.sendAppendEntries(peer);
         }
     }
@@ -448,6 +688,7 @@ export class RaftNode {
      * Get node status
      */
     public getStatus(): {
+        nodeId: string;
         state: RaftState;
         term: number;
         logLength: number;
@@ -455,6 +696,7 @@ export class RaftNode {
         leaderId: string | null;
     } {
         return {
+            nodeId: this.nodeId,
             state: this.state,
             term: this.currentTerm,
             logLength: this.log.length,
@@ -466,7 +708,7 @@ export class RaftNode {
     /**
      * Stop the node
      */
-    public stop(): void {
+    public async stop(): Promise<void> {
         if (this.electionTimeout) {
             clearTimeout(this.electionTimeout);
             this.electionTimeout = null;
@@ -475,5 +717,6 @@ export class RaftNode {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
         }
+        this.initialized = false;
     }
 }

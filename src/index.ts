@@ -1,68 +1,88 @@
-// src/index.ts
-
 import { 
-    SystemConfig, 
-    RaftCommand, 
-    CommandType, 
-    Vector, 
-    SearchResult, 
-    SystemError, 
+    SystemConfig,
+    Vector,
+    SearchResult,
+    SystemError,
     ErrorType,
     RaftState,
     RaftMessage,
-    MessageType
+    MessageType,
+    CommandType,
+    RaftCommand,
+    HealthStatus
 } from './types';
-import { HNSWGraph, hnswMetrics } from './search/hnsw';
+import { HNSWGraph } from './search/hnsw';
 import { RaftNode } from './consensus/raft';
-import { initSIMD, vectorMetrics } from './search/vector';
-import WebSocket from 'ws';
+import { RaftStorage } from './consensus/storage';
+import { RaftNetwork } from './consensus/network';
+import { initSIMD } from './search/vector';
+import { networkLogger, raftLogger, searchLogger } from './utils/logger';
 
 /**
  * Universal Search Hub Implementation
  */
 export class UniversalSearchHub {
-    private readonly config: SystemConfig;
     private readonly searchGraph: HNSWGraph;
     private readonly raftNode: RaftNode;
-    private readonly wsServer: WebSocket.Server;
-    private readonly peers: Map<string, WebSocket>;
-    private readonly metrics: {
-        startTime: number;
-        operations: number;
-        errors: number;
-        lastHealthCheck: number;
-    };
+    private readonly storage: RaftStorage;
+    private readonly network: RaftNetwork;
+    private initialized: boolean = false;
 
-    constructor(config: SystemConfig) {
+    constructor(private readonly config: SystemConfig) {
         this.validateConfig(config);
-        this.config = config;
         this.searchGraph = new HNSWGraph(config.hnsw);
-        this.peers = new Map();
-        this.metrics = {
-            startTime: Date.now(),
-            operations: 0,
-            errors: 0,
-            lastHealthCheck: Date.now()
-        };
-
-        // Initialize SIMD operations
-        this.initializeSIMD();
-
-        // Initialize Raft consensus
+        this.storage = new RaftStorage(config.nodeId, config.storage.dataDir);
+        this.network = new RaftNetwork(config.nodeId, config.peers, config.network);
         this.raftNode = new RaftNode(
             config.nodeId,
             config.peers,
-            config.raft,
+            {
+                ...config.raft,
+                snapshotThreshold: config.storage.snapshotThreshold
+            },
             this.handleRaftMessage.bind(this),
             this.handleRaftCommand.bind(this)
         );
+    }
 
-        // Initialize WebSocket server
-        this.wsServer = new WebSocket.Server({ port: this.getPortFromNodeId() });
-        this.setupWebSocket();
+    /**
+     * Initialize the system
+     */
+    public async initialize(): Promise<void> {
+        if (this.initialized) return;
 
-        // Start monitoring
-        this.startMonitoring();
+        try {
+            // Initialize WASM SIMD
+            await initSIMD();
+
+            // Initialize storage
+            await this.storage.initialize();
+
+            // Initialize network
+            await this.network.initialize();
+
+            // Initialize Raft node
+            await this.raftNode.initialize(this.storage);
+
+            // Setup network message handling
+            this.network.on('message', (message: RaftMessage) => {
+                this.raftNode.handleMessage(message);
+            });
+
+            this.network.on('error', (error: Error) => {
+                networkLogger.error('Network error:', error);
+            });
+
+            this.initialized = true;
+            raftLogger.info('Node initialized successfully');
+        } catch (error) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'INIT_FAILED',
+                'Failed to initialize node',
+                error
+            );
+        }
     }
 
     /**
@@ -83,72 +103,23 @@ export class UniversalSearchHub {
                 'Peers must be an array'
             );
         }
-    }
-
-    /**
-     * Initialize SIMD operations
-     */
-    private async initializeSIMD(): Promise<void> {
-        try {
-            await initSIMD();
-        } catch (error) {
-            console.warn('SIMD initialization failed, falling back to JS implementation');
-        }
-    }
-
-    /**
-     * Extract port number from node ID
-     */
-    private getPortFromNodeId(): number {
-        const port = parseInt(this.config.nodeId.split(':')[1]);
-        if (isNaN(port)) {
+        if (!config.storage?.dataDir) {
             throw new SystemError(
                 ErrorType.SYSTEM,
-                'INVALID_NODE_ID',
-                'Node ID must contain valid port number'
+                'INVALID_CONFIG',
+                'Storage directory is required'
             );
         }
-        return port;
-    }
-
-    /**
-     * Setup WebSocket server and connections
-     */
-    private setupWebSocket(): void {
-        this.wsServer.on('connection', (ws: WebSocket, req: any) => {
-            const peerId = req.headers['x-peer-id'];
-            if (!peerId || !this.config.peers.includes(peerId)) {
-                ws.close();
-                return;
-            }
-
-            this.peers.set(peerId, ws);
-
-            ws.on('message', (data: WebSocket.Data) => {
-                try {
-                    const message = JSON.parse(data.toString()) as RaftMessage;
-                    if (message.to === this.config.nodeId) {
-                        this.raftNode.handleMessage(message);
-                    }
-                } catch (error) {
-                    this.metrics.errors++;
-                    console.error('Error processing message:', error);
-                }
-            });
-
-            ws.on('close', () => {
-                this.peers.delete(peerId);
-            });
-        });
     }
 
     /**
      * Handle Raft messages
      */
-    private handleRaftMessage(message: RaftMessage): void {
-        const peer = this.peers.get(message.to);
-        if (peer && peer.readyState === WebSocket.OPEN) {
-            peer.send(JSON.stringify(message));
+    private async handleRaftMessage(message: RaftMessage): Promise<void> {
+        try {
+            await this.network.sendMessage(message.to, message);
+        } catch (error) {
+            networkLogger.error('Failed to send message:', error);
         }
     }
 
@@ -184,89 +155,24 @@ export class UniversalSearchHub {
                         `Unknown command type: ${command.type}`
                     );
             }
-            this.metrics.operations++;
         } catch (error) {
-            this.metrics.errors++;
+            searchLogger.error('Failed to execute command:', error);
             throw error;
         }
-    }
-
-    /**
-     * Start monitoring system health and metrics
-     */
-    private startMonitoring(): void {
-        // Collect metrics
-        setInterval(() => {
-            const stats = this.searchGraph.getStats();
-            const status = this.raftNode.getStatus();
-            const metrics = {
-                uptime: Date.now() - this.metrics.startTime,
-                operations: this.metrics.operations,
-                errors: this.metrics.errors,
-                searchMetrics: hnswMetrics.getMetrics(),
-                vectorMetrics: vectorMetrics.getMetrics(),
-                graphStats: stats,
-                raftStatus: status,
-                activeConnections: this.peers.size
-            };
-
-            // Log metrics
-            console.log('System Metrics:', JSON.stringify(metrics, null, 2));
-        }, this.config.monitoring.metricsInterval);
-
-        // Health checks
-        setInterval(() => {
-            this.metrics.lastHealthCheck = Date.now();
-            const health = this.getHealth();
-            if (health.status !== 'healthy') {
-                console.warn('Health Check Warning:', health);
-            }
-        }, this.config.monitoring.healthCheckInterval);
-    }
-
-    /**
-     * Get system health status
-     */
-    private getHealth(): {
-        status: 'healthy' | 'degraded' | 'unhealthy';
-        warnings: string[];
-    } {
-        const warnings: string[] = [];
-        
-        // Check Raft status
-        const raftStatus = this.raftNode.getStatus();
-        if (raftStatus.state === RaftState.CANDIDATE) {
-            warnings.push('Node is in candidate state');
-        }
-
-        // Check peer connections
-        if (this.peers.size < this.config.peers.length) {
-            warnings.push('Missing peer connections');
-        }
-
-        // Check error rate
-        const errorRate = this.metrics.errors / Math.max(1, this.metrics.operations);
-        if (errorRate > 0.01) {
-            warnings.push('High error rate detected');
-        }
-
-        // Check search metrics
-        const searchMetrics = hnswMetrics.getMetrics();
-        if (searchMetrics.avgSearchTime > 1) { // > 1ms
-            warnings.push('Search latency above threshold');
-        }
-
-        return {
-            status: warnings.length === 0 ? 'healthy' :
-                    warnings.length < 3 ? 'degraded' : 'unhealthy',
-            warnings
-        };
     }
 
     /**
      * Insert vector into the search graph
      */
     public async insert(vector: Vector, id?: number): Promise<number> {
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'NOT_INITIALIZED',
+                'System not initialized'
+            );
+        }
+
         if (this.raftNode.getStatus().state !== RaftState.LEADER) {
             throw new SystemError(
                 ErrorType.CONSENSUS,
@@ -280,22 +186,37 @@ export class UniversalSearchHub {
             data: { vector, id }
         };
 
-        this.raftNode.submitCommand(command);
-        return id ?? this.metrics.operations;
+        await this.raftNode.submitCommand(command);
+        return id ?? this.searchGraph.getStats().nodeCount - 1;
     }
 
     /**
      * Search for nearest neighbors
      */
     public search(query: Vector, k: number): SearchResult[] {
-        // Search can be performed on any node
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'NOT_INITIALIZED',
+                'System not initialized'
+            );
+        }
+
         return this.searchGraph.search(query, k);
     }
 
     /**
      * Delete vector from the search graph
      */
-    public delete(id: number): void {
+    public async delete(id: number): Promise<void> {
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'NOT_INITIALIZED',
+                'System not initialized'
+            );
+        }
+
         if (this.raftNode.getStatus().state !== RaftState.LEADER) {
             throw new SystemError(
                 ErrorType.CONSENSUS,
@@ -309,13 +230,21 @@ export class UniversalSearchHub {
             data: { id }
         };
 
-        this.raftNode.submitCommand(command);
+        await this.raftNode.submitCommand(command);
     }
 
     /**
      * Update vector in the search graph
      */
-    public update(id: number, vector: Vector): void {
+    public async update(id: number, vector: Vector): Promise<void> {
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'NOT_INITIALIZED',
+                'System not initialized'
+            );
+        }
+
         if (this.raftNode.getStatus().state !== RaftState.LEADER) {
             throw new SystemError(
                 ErrorType.CONSENSUS,
@@ -329,34 +258,101 @@ export class UniversalSearchHub {
             data: { id, vector }
         };
 
-        this.raftNode.submitCommand(command);
+        await this.raftNode.submitCommand(command);
     }
 
     /**
      * Get system metrics
      */
-    public getMetrics(): any {
+    public getMetrics(): {
+        raftStatus: {
+            nodeId: string;
+            state: RaftState;
+            term: number;
+            logLength: number;
+            commitIndex: number;
+            leaderId: string | null;
+        };
+        graphStats: {
+            nodeCount: number;
+            maxLevel: number;
+            averageConnections: number;
+            memoryUsage: number;
+        };
+        networkStatus: Record<string, boolean>;
+        health: HealthStatus;
+    } {
+        if (!this.initialized) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'NOT_INITIALIZED',
+                'System not initialized'
+            );
+        }
+
         return {
-            uptime: Date.now() - this.metrics.startTime,
-            operations: this.metrics.operations,
-            errors: this.metrics.errors,
-            searchMetrics: hnswMetrics.getMetrics(),
-            vectorMetrics: vectorMetrics.getMetrics(),
-            graphStats: this.searchGraph.getStats(),
             raftStatus: this.raftNode.getStatus(),
-            activeConnections: this.peers.size,
+            graphStats: this.searchGraph.getStats(),
+            networkStatus: this.network.getStatus(),
             health: this.getHealth()
         };
     }
 
     /**
-     * Gracefully stop the system
+     * Get system health status
      */
-    public stop(): void {
-        this.raftNode.stop();
-        this.wsServer.close();
-        for (const peer of this.peers.values()) {
-            peer.close();
+    private getHealth(): HealthStatus {
+        const warnings: string[] = [];
+        
+        // Check Raft status
+        const raftStatus = this.raftNode.getStatus();
+        if (raftStatus.state === RaftState.CANDIDATE) {
+            warnings.push('Node is in candidate state');
+        }
+
+        // Check network status
+        const networkStatus = this.network.getStatus();
+        const disconnectedPeers = Object.entries(networkStatus)
+            .filter(([_, connected]) => !connected)
+            .map(([peer]) => peer);
+        
+        if (disconnectedPeers.length > 0) {
+            warnings.push(`Disconnected peers: ${disconnectedPeers.join(', ')}`);
+        }
+
+        // Count active connections
+        const activeConnections = Object.values(networkStatus)
+            .filter(connected => connected).length;
+
+        return {
+            status: warnings.length === 0 ? 'healthy' :
+                    warnings.length < 3 ? 'degraded' : 'unhealthy',
+            lastHeartbeat: Date.now(),
+            activeConnections,
+            errorRate: 0, // TODO: Implement error rate tracking
+            warnings
+        };
+    }
+
+    /**
+     * Stop the system
+     */
+    public async stop(): Promise<void> {
+        if (!this.initialized) return;
+
+        try {
+            await this.raftNode.stop();
+            this.network.stop();
+            await this.storage.close();
+            this.initialized = false;
+            raftLogger.info('Node stopped successfully');
+        } catch (error) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'STOP_FAILED',
+                'Failed to stop node',
+                error
+            );
         }
     }
 }

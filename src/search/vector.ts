@@ -1,33 +1,105 @@
 // src/search/vector.ts
 
 import { Vector, SystemError, ErrorType } from '../types';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 /**
- * WebAssembly SIMD module for vector operations
+ * WebAssembly instance and memory management
  */
-let wasmModule: WebAssembly.Instance | null = null;
+interface WasmExports extends WebAssembly.Exports {
+    euclideanDistance: (offsetA: number, offsetB: number, length: number) => number;
+    cosineSimilarity: (offsetA: number, offsetB: number, length: number) => number;
+    normalize: (offset: number, length: number) => void;
+}
+
+let wasmInstance: WebAssembly.Instance | null = null;
+let wasmMemory: WebAssembly.Memory | null = null;
+let currentOffset = 0;
+const VECTOR_ALIGNMENT = 16; // Required for SIMD operations
+const INITIAL_MEMORY_PAGES = 1024; // 64MB (64KB per page)
 
 /**
  * Initialize WebAssembly SIMD module
  */
 export async function initSIMD(): Promise<void> {
     try {
-        const response = await fetch('vector_simd.wasm');
-        const wasmBuffer = await response.arrayBuffer();
-        const wasmResult = await WebAssembly.instantiate(wasmBuffer, {
+        if (wasmInstance) return;
+
+        // Create WebAssembly memory
+        wasmMemory = new WebAssembly.Memory({
+            initial: INITIAL_MEMORY_PAGES,
+            maximum: INITIAL_MEMORY_PAGES * 2
+        });
+
+        // Reset offset
+        currentOffset = 0;
+
+        // Load WASM module
+        const wasmPath = join(__dirname, '..', '..', 'dist', 'wasm', 'vector_simd.wasm');
+        const wasmBuffer = readFileSync(wasmPath);
+        const wasmModule = await WebAssembly.compile(wasmBuffer);
+
+        // Instantiate WASM module
+        wasmInstance = await WebAssembly.instantiate(wasmModule, {
             env: {
-                memory: new WebAssembly.Memory({ initial: 256 })
+                memory: wasmMemory,
+                memoryBase: 0,
+                tableBase: 0,
+                __memory_base: 0,
+                __table_base: 0,
+                _abort: () => { throw new Error('abort called'); }
             }
         });
-        wasmModule = wasmResult.instance;
+
+        console.log('SIMD WASM module initialized successfully');
     } catch (error) {
+        console.warn('SIMD initialization failed:', error);
         throw new SystemError(
             ErrorType.SYSTEM,
             'WASM_INIT_FAILED',
-            'Failed to initialize WASM SIMD module',
-            error
+            'Failed to initialize WASM SIMD module'
         );
     }
+}
+
+/**
+ * Reset WASM memory offset
+ */
+function resetMemoryOffset(): void {
+    currentOffset = 0;
+}
+
+/**
+ * Copy vector to WASM memory
+ */
+function copyToWasmMemory(vector: Vector): number {
+    if (!wasmMemory) throw new Error('WASM memory not initialized');
+
+    // Align offset for SIMD
+    currentOffset = Math.ceil(currentOffset / VECTOR_ALIGNMENT) * VECTOR_ALIGNMENT;
+    
+    // Ensure we have enough memory
+    const requiredBytes = (currentOffset + vector.length * 4);
+    if (requiredBytes > wasmMemory.buffer.byteLength) {
+        resetMemoryOffset();
+        currentOffset = Math.ceil(currentOffset / VECTOR_ALIGNMENT) * VECTOR_ALIGNMENT;
+        
+        // Check again after reset
+        if ((currentOffset + vector.length * 4) > wasmMemory.buffer.byteLength) {
+            throw new Error('Vector too large for WASM memory');
+        }
+    }
+
+    // Copy vector data
+    const memoryView = new Float32Array(wasmMemory.buffer, currentOffset, vector.length);
+    memoryView.set(vector);
+
+    // Update offset for next allocation
+    const usedOffset = currentOffset;
+    currentOffset += vector.length * 4;
+
+    return usedOffset;
 }
 
 /**
@@ -48,160 +120,151 @@ export function createVector(dimension: number): Vector {
  * Calculate Euclidean distance between two vectors using SIMD
  */
 export function euclideanDistance(a: Vector, b: Vector): number {
-    if (a.length !== b.length) {
+    if (!a || !b || a.length !== b.length) {
         throw new SystemError(
             ErrorType.SYSTEM,
             'DIMENSION_MISMATCH',
-            'Vectors must have same dimension'
+            'Vectors must have same dimension and be non-null'
         );
     }
 
-    if (wasmModule) {
-        // Use WASM SIMD implementation
-        return (wasmModule.exports as any).euclideanDistance(a, b);
-    }
+    try {
+        if (wasmInstance) {
+            const offsetA = copyToWasmMemory(a);
+            const offsetB = copyToWasmMemory(b);
+            const exports = wasmInstance.exports as WasmExports;
+            const result = exports.euclideanDistance(offsetA, offsetB, a.length);
+            resetMemoryOffset();
+            return result;
+        }
 
-    // Fallback to JS implementation with manual SIMD optimization
-    const len = a.length;
-    let sum = 0;
-    
-    // Process 4 elements at a time using SIMD
-    const simdLength = len - (len % 4);
-    for (let i = 0; i < simdLength; i += 4) {
-        const d0 = a[i] - b[i];
-        const d1 = a[i + 1] - b[i + 1];
-        const d2 = a[i + 2] - b[i + 2];
-        const d3 = a[i + 3] - b[i + 3];
-        
-        sum += d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+        // Fallback to JS implementation
+        let sum = 0;
+        for (let i = 0; i < a.length; i++) {
+            const diff = a[i] - b[i];
+            sum += diff * diff;
+        }
+        return Math.sqrt(sum);
+    } catch (error) {
+        throw new SystemError(
+            ErrorType.SYSTEM,
+            'DISTANCE_CALCULATION_FAILED',
+            'Failed to calculate Euclidean distance',
+            error
+        );
     }
-
-    // Handle remaining elements
-    for (let i = simdLength; i < len; i++) {
-        const d = a[i] - b[i];
-        sum += d * d;
-    }
-
-    return Math.sqrt(sum);
 }
 
 /**
  * Calculate cosine similarity between two vectors using SIMD
  */
 export function cosineSimilarity(a: Vector, b: Vector): number {
-    if (a.length !== b.length) {
+    if (!a || !b || a.length !== b.length) {
         throw new SystemError(
             ErrorType.SYSTEM,
             'DIMENSION_MISMATCH',
-            'Vectors must have same dimension'
+            'Vectors must have same dimension and be non-null'
         );
     }
 
-    if (wasmModule) {
-        // Use WASM SIMD implementation
-        return (wasmModule.exports as any).cosineSimilarity(a, b);
+    try {
+        if (wasmInstance) {
+            const offsetA = copyToWasmMemory(a);
+            const offsetB = copyToWasmMemory(b);
+            const exports = wasmInstance.exports as WasmExports;
+            const result = exports.cosineSimilarity(offsetA, offsetB, a.length);
+            resetMemoryOffset();
+            return result;
+        }
+
+        // Fallback to JS implementation
+        let dotProduct = 0;
+        let normA = 0;
+        let normB = 0;
+
+        for (let i = 0; i < a.length; i++) {
+            dotProduct += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+
+        if (normA === 0 || normB === 0) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'ZERO_VECTOR',
+                'Cannot compute similarity with zero vector'
+            );
+        }
+
+        const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+        return Math.min(Math.max(similarity, -1), 1);
+    } catch (error) {
+        throw new SystemError(
+            ErrorType.SYSTEM,
+            'SIMILARITY_CALCULATION_FAILED',
+            'Failed to calculate cosine similarity',
+            error
+        );
     }
-
-    // Fallback to JS implementation with manual SIMD optimization
-    const len = a.length;
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-
-    // Process 4 elements at a time using SIMD
-    const simdLength = len - (len % 4);
-    for (let i = 0; i < simdLength; i += 4) {
-        const dp0 = a[i] * b[i];
-        const dp1 = a[i + 1] * b[i + 1];
-        const dp2 = a[i + 2] * b[i + 2];
-        const dp3 = a[i + 3] * b[i + 3];
-        
-        dotProduct += dp0 + dp1 + dp2 + dp3;
-        
-        const na0 = a[i] * a[i];
-        const na1 = a[i + 1] * a[i + 1];
-        const na2 = a[i + 2] * a[i + 2];
-        const na3 = a[i + 3] * a[i + 3];
-        
-        normA += na0 + na1 + na2 + na3;
-        
-        const nb0 = b[i] * b[i];
-        const nb1 = b[i + 1] * b[i + 1];
-        const nb2 = b[i + 2] * b[i + 2];
-        const nb3 = b[i + 3] * b[i + 3];
-        
-        normB += nb0 + nb1 + nb2 + nb3;
-    }
-
-    // Handle remaining elements
-    for (let i = simdLength; i < len; i++) {
-        dotProduct += a[i] * b[i];
-        normA += a[i] * a[i];
-        normB += b[i] * b[i];
-    }
-
-    const similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-    return Math.min(Math.max(similarity, -1), 1); // Clamp to [-1, 1]
 }
 
 /**
  * Normalize vector in-place using SIMD
  */
 export function normalize(v: Vector): void {
-    if (wasmModule) {
-        // Use WASM SIMD implementation
-        (wasmModule.exports as any).normalize(v);
-        return;
-    }
-
-    // Fallback to JS implementation with manual SIMD optimization
-    const len = v.length;
-    let sum = 0;
-
-    // Process 4 elements at a time using SIMD
-    const simdLength = len - (len % 4);
-    for (let i = 0; i < simdLength; i += 4) {
-        const v0 = v[i];
-        const v1 = v[i + 1];
-        const v2 = v[i + 2];
-        const v3 = v[i + 3];
-        
-        sum += v0 * v0 + v1 * v1 + v2 * v2 + v3 * v3;
-    }
-
-    // Handle remaining elements
-    for (let i = simdLength; i < len; i++) {
-        sum += v[i] * v[i];
-    }
-
-    const norm = Math.sqrt(sum);
-    if (norm === 0) {
+    if (!v || v.length === 0) {
         throw new SystemError(
             ErrorType.SYSTEM,
-            'ZERO_VECTOR',
-            'Cannot normalize zero vector'
+            'INVALID_VECTOR',
+            'Vector must be non-null and non-empty'
         );
     }
 
-    // Normalize using SIMD
-    for (let i = 0; i < simdLength; i += 4) {
-        v[i] /= norm;
-        v[i + 1] /= norm;
-        v[i + 2] /= norm;
-        v[i + 3] /= norm;
-    }
+    try {
+        if (wasmInstance) {
+            const offset = copyToWasmMemory(v);
+            const exports = wasmInstance.exports as WasmExports;
+            exports.normalize(offset, v.length);
+            // Copy normalized vector back
+            const memoryView = new Float32Array(wasmMemory!.buffer, offset, v.length);
+            v.set(memoryView);
+            resetMemoryOffset();
+            return;
+        }
 
-    // Handle remaining elements
-    for (let i = simdLength; i < len; i++) {
-        v[i] /= norm;
+        // Fallback to JS implementation
+        let sum = 0;
+        for (let i = 0; i < v.length; i++) {
+            sum += v[i] * v[i];
+        }
+
+        const norm = Math.sqrt(sum);
+        if (norm === 0) {
+            throw new SystemError(
+                ErrorType.SYSTEM,
+                'ZERO_VECTOR',
+                'Cannot normalize zero vector'
+            );
+        }
+
+        for (let i = 0; i < v.length; i++) {
+            v[i] /= norm;
+        }
+    } catch (error) {
+        throw new SystemError(
+            ErrorType.SYSTEM,
+            'NORMALIZATION_FAILED',
+            'Failed to normalize vector',
+            error
+        );
     }
 }
 
 /**
- * Calculate mean vector of a set of vectors using SIMD
+ * Calculate mean vector of a set of vectors
  */
 export function meanVector(vectors: Vector[]): Vector {
-    if (vectors.length === 0) {
+    if (!vectors || vectors.length === 0) {
         throw new SystemError(
             ErrorType.SYSTEM,
             'EMPTY_VECTOR_SET',
@@ -209,45 +272,48 @@ export function meanVector(vectors: Vector[]): Vector {
         );
     }
 
-    const dimension = vectors[0].length;
+    const firstVector = vectors[0];
+    if (!firstVector) {
+        throw new SystemError(
+            ErrorType.SYSTEM,
+            'INVALID_VECTOR',
+            'First vector must be non-null'
+        );
+    }
+
+    const dimension = firstVector.length;
     const mean = createVector(dimension);
 
-    if (wasmModule) {
-        // Use WASM SIMD implementation
-        return (wasmModule.exports as any).meanVector(vectors);
-    }
-
-    // Fallback to JS implementation with manual SIMD optimization
-    const count = vectors.length;
-    
-    // Process 4 elements at a time using SIMD
-    const simdLength = dimension - (dimension % 4);
-    for (let i = 0; i < simdLength; i += 4) {
-        let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
-        
+    try {
+        // Calculate sum of all vectors
         for (const vector of vectors) {
-            sum0 += vector[i];
-            sum1 += vector[i + 1];
-            sum2 += vector[i + 2];
-            sum3 += vector[i + 3];
+            if (!vector || vector.length !== dimension) {
+                throw new SystemError(
+                    ErrorType.SYSTEM,
+                    'DIMENSION_MISMATCH',
+                    'All vectors must be non-null and have same dimension'
+                );
+            }
+            for (let i = 0; i < dimension; i++) {
+                mean[i] += vector[i];
+            }
         }
-        
-        mean[i] = sum0 / count;
-        mean[i + 1] = sum1 / count;
-        mean[i + 2] = sum2 / count;
-        mean[i + 3] = sum3 / count;
-    }
 
-    // Handle remaining elements
-    for (let i = simdLength; i < dimension; i++) {
-        let sum = 0;
-        for (const vector of vectors) {
-            sum += vector[i];
+        // Calculate mean
+        const count = vectors.length;
+        for (let i = 0; i < dimension; i++) {
+            mean[i] /= count;
         }
-        mean[i] = sum / count;
-    }
 
-    return mean;
+        return mean;
+    } catch (error) {
+        throw new SystemError(
+            ErrorType.SYSTEM,
+            'MEAN_CALCULATION_FAILED',
+            'Failed to calculate mean vector',
+            error
+        );
+    }
 }
 
 /**

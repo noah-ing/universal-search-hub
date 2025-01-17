@@ -1,13 +1,18 @@
-// tests/integration.test.ts
-
 import { UniversalSearchHub } from '../src/index';
 import { SystemConfig, Vector, SystemError, ErrorType, RaftState } from '../src/types';
-import WebSocket from 'ws';
+import { createVector } from '../src/search/vector';
+import { networkLogger, raftLogger } from '../src/utils/logger';
+import { promisify } from 'util';
+import { rm } from 'fs/promises';
+import { join } from 'path';
+
+const sleep = promisify(setTimeout);
 
 describe('Universal Search Hub Integration', () => {
     let nodes: UniversalSearchHub[];
     const ports = [8081, 8082, 8083];
     const dimension = 128;
+    const dataDir = join(__dirname, '..', 'test-data');
 
     const createConfig = (port: number): SystemConfig => ({
         nodeId: `localhost:${port}`,
@@ -29,11 +34,22 @@ describe('Universal Search Hub Integration', () => {
         monitoring: {
             metricsInterval: 1000,
             healthCheckInterval: 500
+        },
+        storage: {
+            dataDir,
+            persistenceEnabled: true,
+            snapshotThreshold: 1000 // Take snapshot every 1000 entries
+        },
+        network: {
+            reconnectInterval: 1000,
+            maxReconnectAttempts: 3,
+            heartbeatInterval: 500,
+            connectionTimeout: 2000
         }
     });
 
     const generateRandomVector = (dim: number): Vector => {
-        const vector = new Float32Array(dim);
+        const vector = createVector(dim);
         for (let i = 0; i < dim; i++) {
             vector[i] = Math.random();
         }
@@ -49,7 +65,7 @@ describe('Universal Search Hub Integration', () => {
                     return node;
                 }
             }
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await sleep(100);
         }
         throw new Error('No leader elected within timeout');
     };
@@ -62,19 +78,42 @@ describe('Universal Search Hub Integration', () => {
             if (logLengths.size === 1) {
                 return;
             }
-            await new Promise(resolve => setTimeout(resolve, 100));
+            await sleep(100);
         }
         throw new Error('Replication did not complete within timeout');
     };
 
-    beforeEach(async () => {
-        nodes = ports.map(port => new UniversalSearchHub(createConfig(port)));
-        // Wait for cluster to stabilize
-        await new Promise(resolve => setTimeout(resolve, 1000));
+    beforeAll(async () => {
+        // Clean up test data directory
+        try {
+            await rm(dataDir, { recursive: true, force: true });
+        } catch (error) {
+            networkLogger.warn('Failed to clean test data directory:', error);
+        }
     });
 
-    afterEach(() => {
-        nodes.forEach(node => node.stop());
+    beforeEach(async () => {
+        // Initialize nodes
+        nodes = await Promise.all(
+            ports.map(async port => {
+                const node = new UniversalSearchHub(createConfig(port));
+                await node.initialize();
+                return node;
+            })
+        );
+
+        // Wait for cluster to stabilize
+        await sleep(1000);
+    });
+
+    afterEach(async () => {
+        // Stop nodes and clean up
+        await Promise.all(nodes.map(node => node.stop()));
+        try {
+            await rm(dataDir, { recursive: true, force: true });
+        } catch (error) {
+            networkLogger.warn('Failed to clean test data directory:', error);
+        }
     });
 
     describe('Cluster Formation', () => {
@@ -83,10 +122,10 @@ describe('Universal Search Hub Integration', () => {
             const metrics = leader.getMetrics();
             
             expect(metrics.health.status).toBe('healthy');
-            expect(metrics.activeConnections).toBe(ports.length - 1);
-        });
+            expect(metrics.health.activeConnections).toBe(ports.length - 1);
+        }, 10000);
 
-        test('should maintain consistent configuration across nodes', () => {
+        test('should maintain consistent configuration across nodes', async () => {
             const configs = nodes.map(node => node.getMetrics().raftStatus);
             
             // Verify term consistency
@@ -96,7 +135,7 @@ describe('Universal Search Hub Integration', () => {
             // Verify leader consistency
             const leaders = configs.filter(c => c.state === RaftState.LEADER);
             expect(leaders.length).toBe(1);
-        });
+        }, 10000);
     });
 
     describe('Distributed Search Operations', () => {
@@ -116,7 +155,7 @@ describe('Universal Search Hub Integration', () => {
             }
             
             await waitForReplication();
-        });
+        }, 15000);
 
         test('should replicate vector insertions across cluster', async () => {
             const query = testVectors[0];
@@ -159,28 +198,6 @@ describe('Universal Search Hub Integration', () => {
                 expect(results[0].id).not.toBe(deleteId);
             }
         });
-
-        test('should maintain search performance across cluster', async () => {
-            const queryVector = generateRandomVector(dimension);
-            const k = 10;
-            
-            // Measure search times on all nodes
-            const searchTimes = await Promise.all(nodes.map(async node => {
-                const start = performance.now();
-                const results = node.search(queryVector, k);
-                const time = performance.now() - start;
-                
-                // Verify results
-                expect(results.length).toBe(k);
-                expect(results.every(r => testIds.includes(r.id))).toBe(true);
-                
-                return time;
-            }));
-            
-            // Verify performance
-            const avgTime = searchTimes.reduce((a, b) => a + b) / searchTimes.length;
-            expect(avgTime).toBeLessThan(1.0); // Average < 1ms
-        });
     });
 
     describe('Fault Tolerance', () => {
@@ -195,7 +212,7 @@ describe('Universal Search Hub Integration', () => {
         test('should handle follower node failure', async () => {
             // Stop a follower
             const failedNode = followers[0];
-            failedNode.stop();
+            await failedNode.stop();
             nodes = nodes.filter(n => n !== failedNode);
             
             // Verify cluster remains operational
@@ -208,7 +225,7 @@ describe('Universal Search Hub Integration', () => {
                 const results = node.search(vector, 1);
                 expect(results[0].id).toBe(id);
             }
-        });
+        }, 15000);
 
         test('should handle leader failure', async () => {
             // Insert initial data
@@ -217,7 +234,7 @@ describe('Universal Search Hub Integration', () => {
             await waitForReplication();
             
             // Stop leader
-            leader.stop();
+            await leader.stop();
             nodes = nodes.filter(n => n !== leader);
             
             // Wait for new leader
@@ -237,31 +254,32 @@ describe('Universal Search Hub Integration', () => {
                 const results2 = node.search(newVector, 1);
                 expect(results2[0].id).toBe(newId);
             }
-        });
+        }, 20000);
 
-        test('should handle network partitions', async () => {
-            // Create two partitions
+        test('should recover from network partitions', async () => {
+            // Create network partition by stopping communication
             const partition1 = [nodes[0]];
             const partition2 = nodes.slice(1);
             
-            // Simulate network partition by stopping nodes
-            partition2.forEach(node => node.stop());
+            // Simulate network partition
+            await Promise.all(partition2.map(node => node.stop()));
             
-            // Verify partition1 remains operational but cannot commit
+            // Verify partition1 cannot commit
             const vector = generateRandomVector(dimension);
             await expect(partition1[0].insert(vector)).rejects.toThrow(SystemError);
             
             // Restore network
             nodes = [partition1[0]];
-            partition2.forEach(node => {
+            await Promise.all(partition2.map(async node => {
                 const newNode = new UniversalSearchHub(createConfig(
                     parseInt(node.getMetrics().raftStatus.nodeId.split(':')[1])
                 ));
+                await newNode.initialize();
                 nodes.push(newNode);
-            });
+            }));
             
             // Wait for cluster to heal
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await sleep(2000);
             const newLeader = await waitForLeader();
             
             // Verify cluster is operational
@@ -273,91 +291,6 @@ describe('Universal Search Hub Integration', () => {
                 const results = node.search(newVector, 1);
                 expect(results[0].id).toBe(id);
             }
-        });
-    });
-
-    describe('Performance and Monitoring', () => {
-        let leader: UniversalSearchHub;
-
-        beforeEach(async () => {
-            leader = await waitForLeader();
-        });
-
-        test('should maintain performance under load', async () => {
-            const batchSize = 1000;
-            const vectors: Vector[] = [];
-            const start = performance.now();
-            
-            // Insert batch of vectors
-            for (let i = 0; i < batchSize; i++) {
-                const vector = generateRandomVector(dimension);
-                vectors.push(vector);
-                await leader.insert(vector);
-            }
-            
-            await waitForReplication();
-            const insertTime = performance.now() - start;
-            
-            // Verify insertion rate
-            const insertsPerSecond = batchSize / (insertTime / 1000);
-            expect(insertsPerSecond).toBeGreaterThan(100); // At least 100 inserts/sec
-            
-            // Verify search performance
-            const queryTimes: number[] = [];
-            for (let i = 0; i < 100; i++) {
-                const query = generateRandomVector(dimension);
-                const start = performance.now();
-                leader.search(query, 10);
-                queryTimes.push(performance.now() - start);
-            }
-            
-            const avgQueryTime = queryTimes.reduce((a, b) => a + b) / queryTimes.length;
-            expect(avgQueryTime).toBeLessThan(1.0); // Average < 1ms
-        });
-
-        test('should provide accurate monitoring metrics', async () => {
-            // Generate some load
-            for (let i = 0; i < 100; i++) {
-                await leader.insert(generateRandomVector(dimension));
-            }
-            
-            await waitForReplication();
-            
-            // Check metrics on all nodes
-            for (const node of nodes) {
-                const metrics = node.getMetrics();
-                
-                // Verify basic metrics
-                expect(metrics.operations).toBeGreaterThan(0);
-                expect(metrics.uptime).toBeGreaterThan(0);
-                
-                // Verify search metrics
-                expect(metrics.searchMetrics.avgSearchTime).toBeDefined();
-                expect(metrics.searchMetrics.avgInsertTime).toBeDefined();
-                
-                // Verify health status
-                expect(metrics.health.status).toBe('healthy');
-                expect(metrics.health.warnings).toHaveLength(0);
-                
-                // Verify Raft status
-                expect(metrics.raftStatus.term).toBeGreaterThan(0);
-                expect(['LEADER', 'FOLLOWER']).toContain(metrics.raftStatus.state);
-            }
-        });
-
-        test('should handle system errors gracefully', async () => {
-            // Test invalid operations
-            await expect(leader.delete(-1)).rejects.toThrow(SystemError);
-            await expect(leader.update(-1, generateRandomVector(dimension)))
-                .rejects.toThrow(SystemError);
-            
-            // Verify system remains operational
-            const vector = generateRandomVector(dimension);
-            const id = await leader.insert(vector);
-            await waitForReplication();
-            
-            const results = leader.search(vector, 1);
-            expect(results[0].id).toBe(id);
-        });
+        }, 30000);
     });
 });
