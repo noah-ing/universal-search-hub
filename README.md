@@ -1,11 +1,12 @@
 # Universal Search Hub
 
-A distributed vector similarity search system with WASM SIMD optimization and Raft consensus.
+A distributed vector similarity search system with WASM SIMD optimization, Raft consensus, and a modern Next.js UI.
 
 ## Features
 
 - High-performance vector similarity search using HNSW algorithm
 - WASM SIMD optimization with automatic JS fallback
+- Modern Next.js frontend interface for vector search
 - Distributed consensus using Raft protocol
 - Automatic log compaction and snapshots
 - Dynamic cluster membership changes
@@ -19,6 +20,26 @@ A distributed vector similarity search system with WASM SIMD optimization and Ra
 - Search Latency: ~2.74ms average
 - Memory Efficiency: ~0.5KB per vector
 - Search Accuracy: 100% exact matches in tests
+
+## Use Cases
+
+### AI/ML Engineers
+- Find similar embeddings for machine learning models
+- Test and validate embedding similarity for semantic search
+- Optimize recommendation systems
+- Work with BERT/GPT text embeddings (384-dimensional vectors)
+
+### Data Scientists
+- Analyze high-dimensional data patterns
+- Discover relationships in complex datasets
+- Validate clustering algorithms
+- Process image feature vectors from models like ResNet (512-dimensional vectors)
+
+### Application Developers
+- Build semantic search features
+- Implement content recommendation systems
+- Create similarity matching functionality
+- Handle user behavior vectors (128-dimensional vectors)
 
 ## Prerequisites
 
@@ -37,6 +58,7 @@ cd universal-search-hub
 2. Install dependencies:
 ```bash
 npm install
+cd frontend && npm install
 ```
 
 3. Build the project:
@@ -83,9 +105,14 @@ LOG_FORMAT=pretty
 
 ### Development Mode
 
-Start a single node in development mode:
+Start the backend:
 ```bash
 npm run start:dev
+```
+
+Start the frontend:
+```bash
+cd frontend && npm run dev
 ```
 
 Start a local cluster for development:
@@ -168,6 +195,10 @@ The project uses:
 
 ```
 .
+├── frontend/         # Next.js frontend application
+│   ├── src/
+│   │   ├── app/     # Next.js app router
+│   │   └── components/ # React components
 ├── src/
 │   ├── consensus/     # Raft consensus implementation
 │   │   ├── network.ts # Network communication
@@ -186,6 +217,14 @@ The project uses:
 ```
 
 ## Implementation Details
+
+### Frontend Interface
+- Modern Next.js application with App Router
+- Tailwind CSS for responsive design
+- Support for manual vector input and random generation
+- Interactive visualization of search results
+- Dark mode support
+- Real-time search with loading states
 
 ### Vector Operations
 - WASM SIMD-accelerated vector operations with automatic JS fallback
