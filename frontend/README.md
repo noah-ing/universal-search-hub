@@ -37,6 +37,21 @@ The following environment variables are required:
 - `HNSW_EF_CONSTRUCTION`: Size of dynamic candidate list for HNSW construction (default: 200)
 - `HNSW_EF_SEARCH`: Size of dynamic candidate list for HNSW search (default: 50)
 
+## TypeScript Configuration
+
+The project requires ES2015 or higher for proper functionality, particularly for Set iteration in the HNSW implementation. This is configured in `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "target": "es2015",
+    // ... other options
+  }
+}
+```
+
+If you encounter type errors related to Set iteration, ensure your TypeScript target is set to "es2015" or higher.
+
 ## Deployment to Vercel
 
 ### Prerequisites
