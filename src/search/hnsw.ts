@@ -374,10 +374,12 @@ export class HNSWGraph {
 
         // Update entry point if necessary
         if (this.entryPoint && this.entryPoint.id === id) {
-            this.entryPoint = this.nodes.size > 0 ? 
-                this.nodes.values().next().value : null;
-            this.maxLevel = this.entryPoint ? 
-                this.entryPoint.maxLevel : 0;
+            // Get the first remaining node or null if no nodes left
+            const firstNode = this.nodes.size > 0 ? 
+                Array.from(this.nodes.values())[0] : null;
+            
+            this.entryPoint = firstNode;
+            this.maxLevel = firstNode ? firstNode.maxLevel : 0;
         }
     }
 
