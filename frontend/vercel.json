@@ -1,0 +1,13 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "env": {
+    "VECTOR_DIMENSION": "384",
+    "MAX_SEARCH_RESULTS": "10",
+    "HNSW_M": "16",
+    "HNSW_EF_CONSTRUCTION": "200",
+    "HNSW_EF_SEARCH": "50"
+  }
+}

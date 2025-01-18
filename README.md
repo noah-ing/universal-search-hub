@@ -1,254 +1,145 @@
 # Universal Search Hub
 
-A distributed vector similarity search system with WASM SIMD optimization, Raft consensus, and a modern Next.js UI.
+A high-performance vector similarity search engine with HNSW algorithm and WASM SIMD optimization.
 
 ## Features
 
-- High-performance vector similarity search using HNSW algorithm
-- WASM SIMD optimization with automatic JS fallback
-- Modern Next.js frontend interface for vector search
-- Distributed consensus using Raft protocol
-- Automatic log compaction and snapshots
-- Dynamic cluster membership changes
-- File-based persistence with in-memory operations
-- Comprehensive error handling and recovery
-- Perfect search accuracy in benchmark tests
-
-## Performance Highlights
-
-- Vector Operations: ~2.8M ops/sec with SIMD
-- Search Latency: ~2.74ms average
-- Memory Efficiency: ~0.5KB per vector
-- Search Accuracy: 100% exact matches in tests
-
-## Use Cases
-
-### AI/ML Engineers
-- Find similar embeddings for machine learning models
-- Test and validate embedding similarity for semantic search
-- Optimize recommendation systems
-- Work with BERT/GPT text embeddings (384-dimensional vectors)
-
-### Data Scientists
-- Analyze high-dimensional data patterns
-- Discover relationships in complex datasets
-- Validate clustering algorithms
-- Process image feature vectors from models like ResNet (512-dimensional vectors)
-
-### Application Developers
-- Build semantic search features
-- Implement content recommendation systems
-- Create similarity matching functionality
-- Handle user behavior vectors (128-dimensional vectors)
-
-## Prerequisites
-
-- Node.js >= 16.0.0
-- Git
-- Emscripten (optional, for WASM SIMD optimization)
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/noah-ing/universal-search-hub.git
-cd universal-search-hub
-```
-
-2. Install dependencies:
-```bash
-npm install
-cd frontend && npm install
-```
-
-3. Build the project:
-```bash
-npm run build
-```
-This will automatically run the WASM build as part of the prebuild script. If Emscripten is not available, the system will automatically use the JS implementation.
-
-## Configuration
-
-Create a `.env` file in the project root (see `.env.example` for all options):
-```env
-# Node Environment
-NODE_ENV=development
-
-# Server Configuration
-PORT=3000
-HOST=localhost
-
-# Cluster Configuration
-CLUSTER_NODES=localhost:3000,localhost:3001,localhost:3002
-NODE_ID=node0
-
-# HNSW Configuration
-HNSW_DIMENSION=128
-HNSW_MAX_ELEMENTS=1000000
-HNSW_M=24                  # Optimized for better connectivity
-HNSW_EF_CONSTRUCTION=400   # Increased for better graph quality
-HNSW_EF_SEARCH=200        # Increased for better search accuracy
-HNSW_ML=1.0
-
-# Raft Configuration
-RAFT_HEARTBEAT_TIMEOUT=50
-RAFT_ELECTION_TIMEOUT_MIN=150
-RAFT_ELECTION_TIMEOUT_MAX=300
-RAFT_BATCH_SIZE=100
-
-# Logging Configuration
-LOG_LEVEL=info
-LOG_FORMAT=pretty
-```
-
-## Running the System
-
-### Development Mode
-
-Start the backend:
-```bash
-npm run start:dev
-```
-
-Start the frontend:
-```bash
-cd frontend && npm run dev
-```
-
-Start a local cluster for development:
-```bash
-npm run start:cluster
-```
-
-### Production Mode
-
-Start a node:
-```bash
-npm run start
-```
-
-### Examples
-
-Run basic usage example:
-```bash
-npm run example
-```
-
-Run cluster example:
-```bash
-npm run example:cluster
-```
-
-## Testing
-
-```bash
-# Run all tests (includes WASM validation)
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Run integration tests
-npm run test:integration
-
-# Run tests with coverage
-npm run test:coverage
-```
-
-## Benchmarking
-
-Run single-node benchmark:
-```bash
-npm run benchmark
-```
-
-Run cluster benchmark:
-```bash
-npm run benchmark:cluster
-```
-
-## Development
-
-### Available Scripts
-
-- `npm run build` - Build the project (includes WASM)
-- `npm run build:wasm` - Build only the WASM module
-- `npm run test:wasm` - Test WASM SIMD implementation
-- `npm run validate` - Build and test WASM
-- `npm run clean` - Clean build artifacts
-- `npm run lint` - Run ESLint
-- `npm run lint:fix` - Fix ESLint issues
-- `npm run format` - Format code with Prettier
-- `npm run docs` - Generate TypeDoc documentation
-
-### Code Quality
-
-The project uses:
-- TypeScript for type safety
-- ESLint for code linting
-- Prettier for code formatting
-- Jest for testing
-- Husky for git hooks
-- Conventional commits
+- **High Performance**: 2.74ms average search latency with 100% accuracy
+- **HNSW Algorithm**: Hierarchical Navigable Small World graph for efficient nearest neighbor search
+- **WASM SIMD**: Optimized vector operations using WebAssembly SIMD instructions
+- **Modern Stack**: Next.js frontend with TypeScript and Tailwind CSS
+- **Distributed System**: Raft consensus for reliable distributed operations
+- **Real-time Search**: Interactive vector similarity search interface
 
 ## Project Structure
 
 ```
-.
-├── frontend/         # Next.js frontend application
+universal-search-hub/
+├── frontend/               # Next.js web interface
 │   ├── src/
-│   │   ├── app/     # Next.js app router
-│   │   └── components/ # React components
-├── src/
-│   ├── consensus/     # Raft consensus implementation
-│   │   ├── network.ts # Network communication
-│   │   ├── raft.ts    # Raft protocol implementation
-│   │   └── storage.ts # Persistence layer
-│   ├── search/        # HNSW search implementation
-│   │   ├── hnsw.ts    # HNSW graph implementation
-│   │   └── vector.ts  # Vector operations with SIMD
-│   ├── types/         # TypeScript type definitions
-│   ├── utils/         # Utility functions
-│   └── wasm/          # WASM SIMD implementation
-├── tests/             # Test files
-├── scripts/           # Build and utility scripts
-├── examples/          # Usage examples
-└── docs/             # Documentation
+│   │   ├── app/           # Next.js app router
+│   │   ├── components/    # React components
+│   │   └── lib/          # Shared utilities
+│   └── public/           # Static assets
+├── src/                  # Core search engine
+│   ├── search/          # HNSW implementation
+│   ├── consensus/       # Raft consensus
+│   ├── wasm/           # WASM SIMD modules
+│   └── utils/          # Utilities
+├── scripts/             # Build and utility scripts
+└── tests/              # Test suites
 ```
 
-## Implementation Details
+## Core Components
 
-### Frontend Interface
-- Modern Next.js application with App Router
-- Tailwind CSS for responsive design
-- Support for manual vector input and random generation
-- Interactive visualization of search results
-- Dark mode support
-- Real-time search with loading states
+### Vector Search Engine
+- HNSW graph implementation for efficient similarity search
+- WASM SIMD optimization for vector operations
+- Configurable index parameters (M, efConstruction, efSearch)
 
-### Vector Operations
-- WASM SIMD-accelerated vector operations with automatic JS fallback
-- Normalized vectors for consistent distance calculations
-- Efficient memory management with Float32Array
+### Distributed System
+- Raft consensus protocol implementation
+- Reliable state replication across nodes
+- Automatic leader election and failure recovery
 
-### HNSW Graph
-- Multi-layer graph structure for logarithmic search complexity
-- Optimized parameters for real-world workloads
-- Dynamic graph maintenance with efficient updates
+### Web Interface
+- Interactive vector search UI
+- Real-time search results
+- Responsive design with Tailwind CSS
 
-### Raft Consensus
-- Single-node and multi-node support
-- Immediate commits in single-node mode
-- Automatic log compaction and snapshots
-- File-based persistence with in-memory operations
+## Getting Started
+
+1. Install dependencies:
+```bash
+# Install root project dependencies
+npm install
+
+# Install frontend dependencies
+cd frontend
+npm install
+```
+
+2. Set up environment variables:
+```bash
+# Root project
+cp .env.example .env
+
+# Frontend
+cd frontend
+cp .env.example .env.local
+```
+
+3. Start the development server:
+```bash
+# Start backend services
+npm run dev
+
+# In another terminal, start frontend
+cd frontend
+npm run dev
+```
+
+## Environment Variables
+
+### Backend
+- `NODE_ID`: Unique identifier for each node
+- `CLUSTER_PEERS`: Comma-separated list of peer node addresses
+- `STORAGE_DIR`: Directory for persistent storage
+- `LOG_LEVEL`: Logging verbosity level
+
+### Frontend
+- `VECTOR_DIMENSION`: Dimension of vectors (default: 384)
+- `MAX_SEARCH_RESULTS`: Maximum search results (default: 10)
+- `HNSW_M`: Maximum connections per layer (default: 16)
+- `HNSW_EF_CONSTRUCTION`: Dynamic candidate list size for construction
+- `HNSW_EF_SEARCH`: Dynamic candidate list size for search
+
+## Performance
+
+- Average Search Latency: 2.74ms
+- Search Accuracy: 100%
+- WASM SIMD Optimization: Enabled
+- Memory Usage: Optimized for large-scale indices
+
+## Development
+
+### Backend Development
+- Implement new search algorithms in `src/search/`
+- Add consensus features in `src/consensus/`
+- Optimize WASM modules in `src/wasm/`
+
+### Frontend Development
+- Add new components in `frontend/src/components/`
+- Modify API routes in `frontend/src/app/api/`
+- Update styles using Tailwind CSS
+
+## Deployment
+
+The project is configured for deployment on Vercel:
+
+1. Push your changes to GitHub
+2. Import the project in Vercel Dashboard
+3. Configure environment variables
+4. Deploy
+
+## Testing
+
+Run the test suites:
+```bash
+# Run all tests
+npm test
+
+# Run specific test suite
+npm test -- tests/search.test.ts
+```
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes using conventional commits
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 

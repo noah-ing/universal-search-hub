@@ -1,13 +1,5 @@
 import { NextResponse } from 'next/server';
-
-// TODO: Import actual search function from backend
-const mockSearch = async (vector: number[]): Promise<Array<{ vector: number[], similarity: number }>> => {
-  // This is a mock implementation that will be replaced with actual backend integration
-  return Array.from({ length: 5 }, (_, i) => ({
-    vector: Array.from({ length: vector.length }, () => Math.random() * 2 - 1),
-    similarity: Math.pow(0.9, i) // Decreasing similarity scores
-  }));
-};
+import { performVectorSearch } from '../../../lib/search-service';
 
 export async function POST(request: Request) {
   try {
@@ -20,8 +12,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // TODO: Replace with actual backend call
-    const results = await mockSearch(vector);
+    const maxResults = parseInt(process.env.MAX_SEARCH_RESULTS || '10');
+    const results = await performVectorSearch(vector, maxResults);
 
     return NextResponse.json(results);
   } catch (error) {

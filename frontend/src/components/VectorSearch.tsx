@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import VectorInput from './VectorInput';
-import SearchResults from './SearchResults';
+import VectorInput from '../components/VectorInput';
+import SearchResults from '../components/SearchResults';
 
 export interface SearchResult {
   vector: number[];
