@@ -17,6 +17,7 @@ export class RaftNetwork extends EventEmitter {
     private reconnectAttempts: Map<string, number> = new Map();
     private reconnectTimers: Map<string, NodeJS.Timeout> = new Map();
     private heartbeatTimers: Map<string, NodeJS.Timeout> = new Map();
+    private server: WebSocket.Server | null = null;
 
     constructor(
         private nodeId: string,
@@ -30,11 +31,16 @@ export class RaftNetwork extends EventEmitter {
      * Initialize network connections
      */
     async initialize(): Promise<void> {
+        // Skip network setup for single-node mode
+        if (this.peers.length === 0) {
+            return;
+        }
+
         // Setup server
         const port = parseInt(this.nodeId.split(':')[1]);
-        const server = new WebSocket.Server({ port });
+        this.server = new WebSocket.Server({ port });
 
-        server.on('connection', (ws: WebSocket, req: any) => {
+        this.server.on('connection', (ws: WebSocket, req: any) => {
             const peerId = req.headers['x-peer-id'];
             if (!peerId || !this.peers.includes(peerId)) {
                 ws.close();
@@ -44,7 +50,7 @@ export class RaftNetwork extends EventEmitter {
             this.handleConnection(peerId, ws);
         });
 
-        server.on('error', (error) => {
+        this.server.on('error', (error) => {
             this.emit('error', new SystemError(
                 ErrorType.NETWORK,
                 'SERVER_ERROR',
@@ -278,6 +284,10 @@ export class RaftNetwork extends EventEmitter {
      * Stop network layer
      */
     stop(): void {
+        if (this.server) {
+            this.server.close();
+            this.server = null;
+        }
         for (const peer of this.peers) {
             this.clearConnection(peer);
         }

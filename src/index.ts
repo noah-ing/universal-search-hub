@@ -6,7 +6,6 @@ import {
     ErrorType,
     RaftState,
     RaftMessage,
-    MessageType,
     CommandType,
     RaftCommand,
     HealthStatus
@@ -27,8 +26,9 @@ export class UniversalSearchHub {
     private readonly storage: RaftStorage;
     private readonly network: RaftNetwork;
     private initialized: boolean = false;
+    private nextId: number = 0;
 
-    constructor(private readonly config: SystemConfig) {
+    constructor(config: SystemConfig) {
         this.validateConfig(config);
         this.searchGraph = new HNSWGraph(config.hnsw);
         this.storage = new RaftStorage(config.nodeId, config.storage.dataDir);
@@ -130,8 +130,9 @@ export class UniversalSearchHub {
         try {
             switch (command.type) {
                 case CommandType.INSERT:
-                    if (command.data.id !== undefined && command.data.vector) {
-                        this.searchGraph.insert(command.data.vector, command.data.id);
+                    if (command.data.vector) {
+                        const id = command.data.id ?? this.nextId++;
+                        this.searchGraph.insert(command.data.vector, id);
                     }
                     break;
 
@@ -145,6 +146,22 @@ export class UniversalSearchHub {
                     if (command.data.id !== undefined && command.data.vector) {
                         this.searchGraph.delete(command.data.id);
                         this.searchGraph.insert(command.data.vector, command.data.id);
+                    }
+                    break;
+
+                case CommandType.CHANGE_CONFIG:
+                    // Handle cluster configuration changes
+                    if (command.data.config) {
+                        // Update network peers if needed
+                        const currentPeers = Object.keys(this.network.getStatus());
+                        const newPeers = command.data.config;
+                        
+                        // Log configuration change
+                        raftLogger.info({
+                            nodeId: this.raftNode.getStatus().nodeId,
+                            currentPeers,
+                            newPeers
+                        }, 'Cluster configuration changed');
                     }
                     break;
 
@@ -181,13 +198,14 @@ export class UniversalSearchHub {
             );
         }
 
+        const actualId = id ?? this.nextId++;
         const command: RaftCommand = {
             type: CommandType.INSERT,
-            data: { vector, id }
+            data: { vector, id: actualId }
         };
 
         await this.raftNode.submitCommand(command);
-        return id ?? this.searchGraph.getStats().nodeCount - 1;
+        return actualId;
     }
 
     /**

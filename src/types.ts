@@ -231,7 +231,8 @@ export enum ErrorType {
     NETWORK = 'NETWORK',
     CONSENSUS = 'CONSENSUS',
     SEARCH = 'SEARCH',
-    SYSTEM = 'SYSTEM'
+    SYSTEM = 'SYSTEM',
+    VALIDATION = 'VALIDATION'  // Added for input validation errors
 }
 
 /**

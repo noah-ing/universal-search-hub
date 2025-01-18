@@ -4,11 +4,8 @@ import { RaftNetwork } from '../src/consensus/network';
 import {
     RaftState,
     RaftMessage,
-    MessageType,
     CommandType,
-    RaftCommand,
-    SystemError,
-    Vector
+    RaftCommand
 } from '../src/types';
 import { rm } from 'fs/promises';
 import { join } from 'path';
@@ -50,7 +47,7 @@ describe('Raft Consensus Implementation', () => {
         const nodeIds = Array.from({ length: nodeCount }, (_, i) => `node${i}`);
 
         // Create message handler for each node
-        const createMessageHandler = (nodeId: string) => (message: RaftMessage) => {
+        const createMessageHandler = () => (message: RaftMessage) => {
             const queue = messageQueues.get(message.to) || [];
             queue.push(message);
             messageQueues.set(message.to, queue);
@@ -82,7 +79,7 @@ describe('Raft Consensus Implementation', () => {
                 nodeId,
                 peers,
                 defaultConfig,
-                createMessageHandler(nodeId),
+                createMessageHandler(),
                 createCommitHandler(nodeId)
             );
             await node.initialize(storage);
@@ -248,8 +245,6 @@ describe('Raft Consensus Implementation', () => {
             await setupCluster(5);
             await sleep(defaultConfig.electionTimeoutMax);
             await processMessages();
-
-            const originalLeader = nodes.find(n => n.getStatus().state === RaftState.LEADER)!;
 
             // Create network partition
             const partition1 = nodes.slice(0, 2);

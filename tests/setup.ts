@@ -111,14 +111,14 @@ const originalConsoleWarn = console.warn;
 const originalConsoleError = console.error;
 
 console.log = (...args) => {
-    if (process.env.JEST_WORKER_ID) {
+    if (process.env['JEST_WORKER_ID']) {
         return; // Suppress console.log in test output
     }
     originalConsoleLog(...args);
 };
 
 console.warn = (...args) => {
-    if (process.env.JEST_WORKER_ID) {
+    if (process.env['JEST_WORKER_ID']) {
         return; // Suppress console.warn in test output
     }
     originalConsoleWarn(...args);

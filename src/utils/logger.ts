@@ -5,8 +5,8 @@ import { config as loadEnv } from 'dotenv';
 loadEnv();
 
 // Default configuration
-const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
-const LOG_FORMAT = process.env.LOG_FORMAT || 'pretty';
+const LOG_LEVEL = process.env['LOG_LEVEL'] || 'info';
+const LOG_FORMAT = process.env['LOG_FORMAT'] || 'pretty';
 
 // Create logger instance
 export const logger = pino({

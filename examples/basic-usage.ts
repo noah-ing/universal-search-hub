@@ -1,6 +1,21 @@
 import { UniversalSearchHub } from '../src/index';
-import { SystemConfig, Vector } from '../src/types';
+import { SystemConfig, Vector, RaftState } from '../src/types';
 import { createVector } from '../src/search/vector';
+
+/**
+ * Wait for node to become leader
+ */
+async function waitForLeadership(searchHub: UniversalSearchHub, timeout: number = 5000): Promise<void> {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+        const metrics = searchHub.getMetrics();
+        if (metrics.raftStatus.state === RaftState.LEADER) {
+            return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('Node did not become leader within timeout');
+}
 
 /**
  * Example demonstrating basic usage of Universal Search Hub
@@ -13,9 +28,9 @@ async function runExample() {
         hnsw: {
             dimension: 128,
             maxElements: 10000,
-            M: 16,
-            efConstruction: 200,
-            efSearch: 50,
+            M: 24,                  // Increased for better connectivity
+            efConstruction: 400,    // Increased for better graph quality
+            efSearch: 200,          // Increased for better search accuracy
             ml: 1.0
         },
         raft: {
@@ -27,27 +42,58 @@ async function runExample() {
         monitoring: {
             metricsInterval: 1000,
             healthCheckInterval: 500
+        },
+        storage: {
+            dataDir: './data',
+            persistenceEnabled: true,
+            snapshotThreshold: 1000
+        },
+        network: {
+            reconnectInterval: 1000,
+            maxReconnectAttempts: 5,
+            heartbeatInterval: 100,
+            connectionTimeout: 5000
         }
     };
 
     // Create search hub instance
     console.log('Initializing Universal Search Hub...');
     const searchHub = new UniversalSearchHub(config);
+    await searchHub.initialize();
+    console.log('Initialization complete');
 
     try {
-        // Generate some test vectors
+        // Wait for node to become leader
+        console.log('Waiting for leadership...');
+        await waitForLeadership(searchHub);
+        console.log('Node is now leader');
+
+        // Generate test vectors with some structure
         console.log('\nGenerating test vectors...');
         const numVectors = 1000;
         const vectors: Vector[] = [];
         const ids: number[] = [];
 
-        for (let i = 0; i < numVectors; i++) {
-            const vector = createVector(config.hnsw.dimension);
-            // Fill with random values
+        // Create clusters of similar vectors for better testing
+        const numClusters = 10;
+        const vectorsPerCluster = numVectors / numClusters;
+        
+        for (let cluster = 0; cluster < numClusters; cluster++) {
+            // Create a cluster center
+            const center = createVector(config.hnsw.dimension);
             for (let j = 0; j < config.hnsw.dimension; j++) {
-                vector[j] = Math.random();
+                center[j] = Math.random();
             }
-            vectors.push(vector);
+
+            // Create vectors around this center
+            for (let i = 0; i < vectorsPerCluster; i++) {
+                const vector = createVector(config.hnsw.dimension);
+                // Add small random variations to the center
+                for (let j = 0; j < config.hnsw.dimension; j++) {
+                    vector[j] = center[j] + (Math.random() - 0.5) * 0.1;
+                }
+                vectors.push(vector);
+            }
         }
 
         // Insert vectors
@@ -61,11 +107,15 @@ async function runExample() {
         console.log(`Inserted ${numVectors} vectors in ${insertTime.toFixed(2)}ms`);
         console.log(`Average insert time: ${(insertTime / numVectors).toFixed(2)}ms per vector`);
 
-        // Perform some searches
+        // Perform searches
         console.log('\nPerforming searches...');
         const numQueries = 100;
         const k = 10; // Number of nearest neighbors to find
         const searchTimes: number[] = [];
+        let exactMatches = 0;
+        let closeMatches = 0;
+        const EXACT_THRESHOLD = 1e-4;  // Relaxed threshold for exact matches
+        const CLOSE_THRESHOLD = 1e-2;  // Threshold for close matches
 
         for (let i = 0; i < numQueries; i++) {
             const queryVector = vectors[Math.floor(Math.random() * vectors.length)];
@@ -74,11 +124,16 @@ async function runExample() {
             const searchTime = performance.now() - searchStart;
             searchTimes.push(searchTime);
 
-            // Verify first result is the query vector itself
-            const firstResult = results[0];
-            if (firstResult.id === ids[vectors.indexOf(queryVector)]) {
-                if (firstResult.distance < 1e-6) {
-                    console.log(`Query ${i + 1}: Successfully found exact match`);
+            // Verify results
+            if (results.length > 0) {
+                const firstResult = results[0];
+                const queryIndex = vectors.indexOf(queryVector);
+                if (queryIndex !== -1 && firstResult.id === ids[queryIndex]) {
+                    if (firstResult.distance < EXACT_THRESHOLD) {
+                        exactMatches++;
+                    } else if (firstResult.distance < CLOSE_THRESHOLD) {
+                        closeMatches++;
+                    }
                 }
             }
         }
@@ -92,20 +147,27 @@ async function runExample() {
         console.log(`- Average: ${avgSearchTime.toFixed(2)}ms`);
         console.log(`- Maximum: ${maxSearchTime.toFixed(2)}ms`);
         console.log(`- Minimum: ${minSearchTime.toFixed(2)}ms`);
+        console.log(`- Exact Matches (dist < ${EXACT_THRESHOLD}): ${exactMatches}/${numQueries}`);
+        console.log(`- Close Matches (dist < ${CLOSE_THRESHOLD}): ${closeMatches}/${numQueries}`);
 
         // Print system metrics
         const metrics = searchHub.getMetrics();
         console.log('\nSystem Metrics:');
-        console.log('- Search Metrics:');
-        console.log(`  * Average Search Time: ${metrics.searchMetrics.avgSearchTime.toFixed(2)}ms`);
-        console.log(`  * Average Insert Time: ${metrics.searchMetrics.avgInsertTime.toFixed(2)}ms`);
-        console.log('- Memory Usage:');
-        console.log(`  * ${(metrics.graphStats.memoryUsage / 1024 / 1024).toFixed(2)} MB`);
+        console.log('- Raft Status:');
+        console.log(`  * Node ID: ${metrics.raftStatus.nodeId}`);
+        console.log(`  * State: ${metrics.raftStatus.state}`);
+        console.log(`  * Term: ${metrics.raftStatus.term}`);
+        console.log(`  * Log Length: ${metrics.raftStatus.logLength}`);
+        console.log(`  * Leader ID: ${metrics.raftStatus.leaderId || 'self'}`);
         console.log('- Graph Statistics:');
-        console.log(`  * Nodes: ${metrics.graphStats.nodeCount}`);
+        console.log(`  * Node Count: ${metrics.graphStats.nodeCount}`);
+        console.log(`  * Max Level: ${metrics.graphStats.maxLevel}`);
         console.log(`  * Average Connections: ${metrics.graphStats.averageConnections.toFixed(2)}`);
-        console.log('- Health:');
+        console.log(`  * Memory Usage: ${(metrics.graphStats.memoryUsage / 1024 / 1024).toFixed(2)} MB`);
+        console.log('- Health Status:');
         console.log(`  * Status: ${metrics.health.status}`);
+        console.log(`  * Active Connections: ${metrics.health.activeConnections}`);
+        console.log(`  * Error Rate: ${metrics.health.errorRate.toFixed(2)}%`);
         console.log(`  * Warnings: ${metrics.health.warnings.length > 0 ? metrics.health.warnings.join(', ') : 'None'}`);
 
         // Test vector updates
@@ -118,7 +180,7 @@ async function runExample() {
 
         await searchHub.update(updateId, newVector);
         const searchResult = searchHub.search(newVector, 1);
-        if (searchResult[0].id === updateId && searchResult[0].distance < 1e-6) {
+        if (searchResult.length > 0 && searchResult[0].id === updateId && searchResult[0].distance < EXACT_THRESHOLD) {
             console.log('Vector update successful');
         }
 
@@ -127,7 +189,7 @@ async function runExample() {
         const deleteId = ids[1];
         await searchHub.delete(deleteId);
         const deletedSearch = searchHub.search(vectors[1], 1);
-        if (deletedSearch[0].id !== deleteId) {
+        if (deletedSearch.length > 0 && deletedSearch[0].id !== deleteId) {
             console.log('Vector deletion successful');
         }
 
@@ -135,7 +197,7 @@ async function runExample() {
         console.error('Error:', error);
     } finally {
         // Cleanup
-        searchHub.stop();
+        await searchHub.stop();
         console.log('\nExample completed');
     }
 }

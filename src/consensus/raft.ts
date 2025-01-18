@@ -12,8 +12,7 @@ import {
     ErrorType,
     InstallSnapshot,
     SnapshotResponse,
-    CommandType,
-    ClusterConfig
+    CommandType
 } from '../types';
 import { RaftStorage } from './storage';
 import { raftLogger } from '../utils/logger';
@@ -33,7 +32,6 @@ export class RaftNode {
     private leaderId: string | null = null;
     private electionTimeout: NodeJS.Timeout | null = null;
     private heartbeatInterval: NodeJS.Timeout | null = null;
-    private lastHeartbeat: number = Date.now();
     private storage: RaftStorage | null = null;
     private initialized: boolean = false;
     private clusterConfig: string[];
@@ -102,6 +100,12 @@ export class RaftNode {
         await this.storage?.saveTerm(this.currentTerm);
         await this.storage?.saveVotedFor(this.votedFor);
         await this.storage?.saveState(this.state);
+
+        // In single-node mode, immediately become leader
+        if (this.peers.length === 0) {
+            await this.becomeLeader();
+            return;
+        }
 
         const lastLog = this.log[this.log.length - 1];
         const request: VoteRequest = {
@@ -673,14 +677,20 @@ export class RaftNode {
 
         this.matchIndex.set(this.nodeId, entry.index);
 
-        // Check if we need to create a snapshot
-        if (this.log.length >= this.config.snapshotThreshold) {
-            await this.createSnapshot();
-        }
+        // In single-node mode, commit immediately
+        if (this.peers.length === 0) {
+            this.commitIndex = entry.index;
+            await this.applyCommitted();
+        } else {
+            // Check if we need to create a snapshot
+            if (this.log.length >= this.config.snapshotThreshold) {
+                await this.createSnapshot();
+            }
 
-        // Replicate to all peers
-        for (const peer of this.clusterConfig.filter(id => id !== this.nodeId)) {
-            this.sendAppendEntries(peer);
+            // Replicate to all peers
+            for (const peer of this.clusterConfig.filter(id => id !== this.nodeId)) {
+                this.sendAppendEntries(peer);
+            }
         }
     }
 

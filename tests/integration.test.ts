@@ -1,7 +1,7 @@
 import { UniversalSearchHub } from '../src/index';
-import { SystemConfig, Vector, SystemError, ErrorType, RaftState } from '../src/types';
+import { SystemConfig, Vector, SystemError, RaftState } from '../src/types';
 import { createVector } from '../src/search/vector';
-import { networkLogger, raftLogger } from '../src/utils/logger';
+import { networkLogger } from '../src/utils/logger';
 import { promisify } from 'util';
 import { rm } from 'fs/promises';
 import { join } from 'path';
