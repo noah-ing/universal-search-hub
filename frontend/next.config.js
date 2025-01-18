@@ -1,4 +1,5 @@
-/** @type {import('next').NextConfig} */
+ 
+ ** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   webpack: (config) => {
@@ -22,13 +23,6 @@ const nextConfig = {
       stream: false,
     };
 
-    // Transpile plotly.js
-    config.module.rules.push({
-      test: /\.js$/,
-      include: /node_modules\/plotly\.js-dist-min/,
-      use: { loader: 'babel-loader' }
-    });
-
     return config;
   },
   // Environment variables that should be exposed to the browser
@@ -36,7 +30,7 @@ const nextConfig = {
     NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL,
   },
   // Allow importing from plotly.js
-  transpilePackages: ['plotly.js-dist-min']
+  transpilePackages: ['plotly.js-dist-min', 'react-plotly.js']
 }
 
 module.exports = nextConfig
