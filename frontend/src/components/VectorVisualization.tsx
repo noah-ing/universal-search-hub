@@ -50,6 +50,7 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
       window.addEventListener('resize', updateWidth);
       return () => window.removeEventListener('resize', updateWidth);
     }
+    return () => {}; // Return empty cleanup function for SSR
   }, []);
 
   if (!queryVector || !results.length) {
