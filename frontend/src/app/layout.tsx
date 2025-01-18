@@ -1,6 +1,7 @@
 'use client';
 
 import './globals.css';
+import { Analytics } from "@vercel/analytics/react";
 
 export default function RootLayout({
   children,
@@ -17,6 +18,7 @@ export default function RootLayout({
         <main className="container mx-auto px-4 py-8">
           {children}
         </main>
+        <Analytics />
       </body>
     </html>
   );
