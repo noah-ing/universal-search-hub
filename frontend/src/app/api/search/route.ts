@@ -91,13 +91,13 @@ export async function POST(request: Request): Promise<NextResponse<SearchRespons
 
       // Get max results from request or environment or default
       const maxResults = performanceMonitor.measure('parse-max-results', () => {
-        const envMax = parseInt(process.env.MAX_SEARCH_RESULTS || String(DEFAULT_MAX_RESULTS));
+        const envMax = parseInt(process.env.NEXT_PUBLIC_MAX_SEARCH_RESULTS || String(DEFAULT_MAX_RESULTS));
         const requested = body.maxResults ? Math.min(body.maxResults, envMax) : envMax;
         logger.debug('Using max results', {
           requestId,
           requested: String(requested),
           default: String(DEFAULT_MAX_RESULTS),
-          envValue: process.env.MAX_SEARCH_RESULTS || 'not set',
+          envValue: process.env.NEXT_PUBLIC_MAX_SEARCH_RESULTS || 'not set',
         });
         return requested;
       });

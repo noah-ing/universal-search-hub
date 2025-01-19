@@ -17,7 +17,8 @@ const SUPPORTED_DIMENSIONS = Array.from(new Set([
   384 // Include the default dimension
 ])).sort((a, b) => a - b);
 
-const MAX_RESULTS = Number(process.env.MAX_SEARCH_RESULTS) || 20;
+// Use NEXT_PUBLIC_ prefix for client-side env vars
+const MAX_RESULTS = Number(process.env.NEXT_PUBLIC_MAX_SEARCH_RESULTS) || 20;
 
 interface UseVectorSearchReturn extends Omit<SearchState, 'results'> {
   results: EnhancedSearchResult[];
