@@ -117,7 +117,7 @@ LOG_LEVEL=info
 ```env
 # Default dimension (can be overridden at runtime)
 NEXT_PUBLIC_VECTOR_DIMENSION=384
-MAX_SEARCH_RESULTS=20
+NEXT_PUBLIC_MAX_SEARCH_RESULTS=20
 
 # HNSW Parameters
 HNSW_M=16
