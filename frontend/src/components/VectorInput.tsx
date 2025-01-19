@@ -15,20 +15,31 @@ interface VectorInputProps {
 
 type InputMethod = 'manual' | 'random' | 'file' | 'template';
 
-const VECTOR_DIMENSION = Number(process.env.VECTOR_DIMENSION) || 384;
+const VECTOR_DIMENSION = Number(process.env.NEXT_PUBLIC_VECTOR_DIMENSION) || 384;
 
 function VectorInput({ onSearch, isLoading }: VectorInputProps) {
   const [inputMethod, setInputMethod] = useState<InputMethod>('template');
   const [manualInput, setManualInput] = useState('');
   const [preprocessing, setPreprocessing] = useState<'none' | 'normalize' | 'standardize'>('none');
   const [error, setError] = useState<string | null>(null);
+  const [currentVector, setCurrentVector] = useState<number[] | null>(null);
 
   const processVector = useCallback((vector: number[]) => {
     return performanceMonitor.measure('process_vector', () => {
       try {
-        // Validate vector dimension
+        // Debug logging for validation
+        console.log('Vector validation:', {
+          actualLength: vector.length,
+          expectedLength: VECTOR_DIMENSION,
+          isArray: Array.isArray(vector),
+          sampleValues: vector.slice(0, 5),
+          lastValues: vector.slice(-5),
+          envValue: process.env.NEXT_PUBLIC_VECTOR_DIMENSION,
+        });
+
+        // Validate vector dimension with detailed error
         if (vector.length !== VECTOR_DIMENSION) {
-          throw new Error(`Vector must have exactly ${VECTOR_DIMENSION} dimensions`);
+          throw new Error(`Vector dimension mismatch: got ${vector.length}, expected ${VECTOR_DIMENSION}. First 5 values: [${vector.slice(0, 5).join(', ')}], Last 5 values: [${vector.slice(-5).join(', ')}]`);
         }
 
         let processedVector = [...vector];
@@ -44,12 +55,7 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
           processedVector = vector.map(val => (val - mean) / stdDev);
         }
 
-        logger.debug('Vector processed', {
-          preprocessing,
-          originalLength: String(vector.length),
-          processedLength: String(processedVector.length),
-        });
-        
+        setCurrentVector(processedVector);
         return processedVector;
       } catch (error) {
         logger.error('Vector processing failed', {
@@ -69,11 +75,6 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
       setError(null);
       const text = await file.text();
       let vector: number[] = [];
-
-      logger.info('Processing vector file', {
-        fileName: file.name,
-        fileSize: String(file.size),
-      });
 
       // Try parsing as JSON first
       try {
@@ -101,26 +102,20 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
 
       const processedVector = processVector(vector);
       onSearch(processedVector);
-
-      logger.info('File processing complete', {
-        vectorLength: String(vector.length),
-      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error processing file';
-      logger.error('File processing failed', {
-        error: message,
-        fileName: file.name,
-      });
       setError(message);
     }
   }, [onSearch, processVector]);
 
   const generateRandomVector = useCallback(() => {
-    return performanceMonitor.measure('generate_random_vector', () => 
-      Array.from({ length: VECTOR_DIMENSION }, 
+    return performanceMonitor.measure('generate_random_vector', () => {
+      const vector = Array.from({ length: VECTOR_DIMENSION }, 
         () => Math.random() * 2 - 1
-      )
-    );
+      );
+      setCurrentVector(vector);
+      return vector;
+    });
   }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -138,10 +133,33 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     try {
       let vector: number[];
       if (inputMethod === 'manual') {
-        vector = manualInput.split(',').map(num => {
-          const parsed = parseFloat(num.trim());
-          if (isNaN(parsed)) throw new Error('Invalid number format');
+        // Enhanced parsing for manual input
+        const rawValues = manualInput
+          .trim()
+          .split(',')
+          .map(s => s.trim())
+          .filter(s => s !== ''); // Remove empty entries
+
+        console.log('Manual input parsing:', {
+          rawInputLength: manualInput.length,
+          splitLength: rawValues.length,
+          firstFew: rawValues.slice(0, 5),
+          lastFew: rawValues.slice(-5),
+          rawInput: manualInput,
+        });
+
+        vector = rawValues.map((num, index) => {
+          const parsed = parseFloat(num);
+          if (isNaN(parsed)) {
+            throw new Error(`Invalid number at position ${index + 1}: "${num}"`);
+          }
           return parsed;
+        });
+
+        console.log('Parsed vector:', {
+          length: vector.length,
+          firstFew: vector.slice(0, 5),
+          lastFew: vector.slice(-5),
         });
       } else {
         vector = generateRandomVector();
@@ -151,32 +169,36 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
       onSearch(processedVector);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Invalid input';
-      logger.error('Vector input failed', {
-        error: message,
-        inputMethod,
-      });
       setError(message);
     }
   };
 
   const handleTemplateSelect = useCallback((template: typeof vectorTemplates[keyof typeof vectorTemplates]) => {
     try {
-      logger.info('Using vector template', {
-        template: template.title,
-        dimension: String(template.dimension),
-      });
-
       const processedVector = processVector(template.vector);
       onSearch(processedVector);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Invalid template vector';
-      logger.error('Template processing failed', {
-        error: message,
-        template: template.title,
-      });
       setError(message);
     }
   }, [onSearch, processVector]);
+
+  const handleDownloadVector = useCallback(() => {
+    if (!currentVector) {
+      const vector = generateRandomVector();
+      setCurrentVector(vector);
+    }
+    const vector = currentVector || generateRandomVector();
+    const blob = new Blob([JSON.stringify(vector, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'vector.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [currentVector, generateRandomVector]);
 
   return (
     <div className="space-y-6">
@@ -236,8 +258,11 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
               onChange={(e) => setManualInput(e.target.value)}
               className="w-full px-3 py-2 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
               rows={3}
-              placeholder={`e.g., ${Array(VECTOR_DIMENSION).fill('0').join(', ')}`}
+              placeholder={`e.g., ${Array(5).fill('0').join(', ')}, ...`}
             />
+            <p className="text-sm text-gray-500 mt-1">
+              Current count: {manualInput.split(',').filter(x => x.trim()).length} / {VECTOR_DIMENSION}
+            </p>
           </div>
         )}
 
@@ -246,12 +271,21 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
             <label className="block text-sm text-gray-400 mb-2">
               Vector dimension (fixed at {VECTOR_DIMENSION})
             </label>
-            <input
-              type="number"
-              value={VECTOR_DIMENSION}
-              disabled
-              className="w-full px-3 py-2 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300 opacity-50"
-            />
+            <div className="flex gap-4">
+              <input
+                type="number"
+                value={VECTOR_DIMENSION}
+                disabled
+                className="flex-1 px-3 py-2 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300 opacity-50"
+              />
+              <button
+                type="button"
+                onClick={handleDownloadVector}
+                className="px-4 py-2 rounded bg-[#1A1F2A] text-gray-300 hover:bg-[#252B38] border border-gray-700"
+              >
+                Download Vector
+              </button>
+            </div>
           </div>
         )}
 
