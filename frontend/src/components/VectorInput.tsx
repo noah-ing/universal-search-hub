@@ -28,13 +28,13 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     return performanceMonitor.measure('process_vector', () => {
       try {
         // Debug logging for validation
-        console.log('Vector validation:', {
-          actualLength: vector.length,
-          expectedLength: VECTOR_DIMENSION,
-          isArray: Array.isArray(vector),
-          sampleValues: vector.slice(0, 5),
-          lastValues: vector.slice(-5),
-          envValue: process.env.NEXT_PUBLIC_VECTOR_DIMENSION,
+        logger.debug('Vector validation:', {
+          actualLength: String(vector.length),
+          expectedLength: String(VECTOR_DIMENSION),
+          isArray: String(Array.isArray(vector)),
+          sampleValues: JSON.stringify(vector.slice(0, 5)),
+          lastValues: JSON.stringify(vector.slice(-5)),
+          envValue: process.env.NEXT_PUBLIC_VECTOR_DIMENSION || '',
         });
 
         // Validate vector dimension with detailed error
@@ -67,6 +67,39 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     });
   }, [preprocessing]);
 
+  const validateJsonVector = (parsed: unknown): number[] => {
+    // If it's a direct array
+    if (Array.isArray(parsed)) {
+      if (parsed.every(n => typeof n === 'number')) {
+        return parsed;
+      }
+      logger.error('JSON validation failed: Array contains non-number values', {
+        sample: JSON.stringify(parsed.slice(0, 5)),
+      });
+      throw new Error('Vector must contain only numbers');
+    }
+
+    // If it's an object with a vector property
+    if (parsed && typeof parsed === 'object' && 'vector' in parsed) {
+      const vector = (parsed as { vector: unknown }).vector;
+      if (Array.isArray(vector) && vector.every(n => typeof n === 'number')) {
+        return vector;
+      }
+      logger.error('JSON validation failed: Invalid vector property', {
+        vectorType: typeof vector,
+        isArray: String(Array.isArray(vector)),
+        sample: Array.isArray(vector) ? JSON.stringify(vector.slice(0, 5)) : 'not an array',
+      });
+      throw new Error('Invalid vector format in JSON');
+    }
+
+    logger.error('JSON validation failed: Unexpected format', {
+      type: typeof parsed,
+      keys: parsed && typeof parsed === 'object' ? JSON.stringify(Object.keys(parsed)) : '[]',
+    });
+    throw new Error('JSON must contain either an array or an object with a vector property');
+  };
+
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file) return;
@@ -74,24 +107,42 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     try {
       setError(null);
       const text = await file.text();
-      let vector: number[] = [];
+      let vector: number[];
+
+      logger.info('Processing uploaded file', {
+        fileName: file.name,
+        fileSize: String(file.size),
+        fileType: file.type,
+      });
 
       // Try parsing as JSON first
       try {
         const parsed = JSON.parse(text);
-        if (Array.isArray(parsed) && parsed.every(n => typeof n === 'number')) {
-          vector = parsed;
-        } else {
-          throw new Error('Invalid JSON format');
-        }
-      } catch {
+        logger.debug('JSON parsing successful', {
+          type: typeof parsed,
+          isArray: String(Array.isArray(parsed)),
+          sample: JSON.stringify(parsed).slice(0, 100),
+        });
+
+        vector = validateJsonVector(parsed);
+      } catch (jsonError) {
+        logger.debug('JSON parsing failed, attempting CSV/text parsing', {
+          error: jsonError instanceof Error ? jsonError.message : 'Unknown error',
+        });
+
         // If not JSON, try parsing as CSV/text
         vector = text
           .trim()
           .split(/[,\n\t\s]+/)
-          .map(n => {
+          .map((n, index) => {
             const parsed = parseFloat(n.trim());
-            if (isNaN(parsed)) throw new Error('Invalid number format');
+            if (isNaN(parsed)) {
+              logger.error('Invalid number in CSV/text', {
+                index: String(index),
+                value: n.trim(),
+              });
+              throw new Error(`Invalid number at position ${index + 1}: "${n.trim()}"`);
+            }
             return parsed;
           });
       }
@@ -100,10 +151,19 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
         throw new Error('No valid numbers found in file');
       }
 
+      logger.info('File processing successful', {
+        vectorLength: String(vector.length),
+        sample: JSON.stringify(vector.slice(0, 5)),
+      });
+
       const processedVector = processVector(vector);
       onSearch(processedVector);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Error processing file';
+      logger.error('File processing failed', {
+        error: message,
+        fileName: file.name,
+      });
       setError(message);
     }
   }, [onSearch, processVector]);
@@ -122,6 +182,7 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     onDrop,
     accept: {
       'text/*': ['.txt', '.csv', '.json'],
+      'application/json': ['.json'],
     },
     multiple: false,
   });
@@ -140,12 +201,11 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
           .map(s => s.trim())
           .filter(s => s !== ''); // Remove empty entries
 
-        console.log('Manual input parsing:', {
-          rawInputLength: manualInput.length,
-          splitLength: rawValues.length,
-          firstFew: rawValues.slice(0, 5),
-          lastFew: rawValues.slice(-5),
-          rawInput: manualInput,
+        logger.debug('Manual input parsing:', {
+          rawInputLength: String(manualInput.length),
+          splitLength: String(rawValues.length),
+          firstFew: JSON.stringify(rawValues.slice(0, 5)),
+          lastFew: JSON.stringify(rawValues.slice(-5)),
         });
 
         vector = rawValues.map((num, index) => {
@@ -156,10 +216,10 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
           return parsed;
         });
 
-        console.log('Parsed vector:', {
-          length: vector.length,
-          firstFew: vector.slice(0, 5),
-          lastFew: vector.slice(-5),
+        logger.debug('Parsed vector:', {
+          length: String(vector.length),
+          firstFew: JSON.stringify(vector.slice(0, 5)),
+          lastFew: JSON.stringify(vector.slice(-5)),
         });
       } else {
         vector = generateRandomVector();
@@ -184,12 +244,8 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
   }, [onSearch, processVector]);
 
   const handleDownloadVector = useCallback(() => {
-    if (!currentVector) {
-      const vector = generateRandomVector();
-      setCurrentVector(vector);
-    }
     const vector = currentVector || generateRandomVector();
-    const blob = new Blob([JSON.stringify(vector, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ vector }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -308,6 +364,9 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
                     : 'Drag & drop a vector file here, or click to select'}
                 </p>
                 <p className="text-sm text-gray-500 mt-2">
+                  Accepts JSON files with vector array or CSV/TXT with comma-separated values
+                </p>
+                <p className="text-sm text-gray-500">
                   Vector must have exactly {VECTOR_DIMENSION} dimensions
                 </p>
               </>

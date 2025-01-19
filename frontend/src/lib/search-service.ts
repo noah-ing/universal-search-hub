@@ -1,13 +1,17 @@
 import { HNSWGraph } from '../../../src/search/hnsw';
 import type { 
-  Vector, 
+  Vector,
   TypedVector,
-  HNSWConfig, 
-  SearchResult, 
-  VectorTemplates,
-  LogContext
+  HNSWConfig
 } from '../types/app';
-import { toTypedVector, fromTypedVector } from '../types/app';
+import { 
+  EnhancedVector,
+  VectorCollection,
+  SearchOptions,
+  EnhancedSearchResult,
+  sampleCollections
+} from '../types/vector';
+import { toTypedVector } from '../types/app';
 import { logger } from './logger';
 import { performanceMonitor } from './performance';
 
@@ -35,55 +39,104 @@ try {
     throw error;
 }
 
-// Store vectors with their IDs for retrieval
-const vectorStore = new Map<number, Vector>();
+// Store vectors with their metadata
+const vectorStore = new Map<number, EnhancedVector>();
 
-// Generate and insert sample vectors with different patterns
-const generateSampleVectors = (): Vector[] => {
-    logger.info('Generating sample vectors');
-    const samples = performanceMonitor.measure('generateSampleVectors', () => [
-        // Text embedding-like vectors (dense with small values)
-        Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1),
-        Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1),
-        // Image feature vectors (sparse with larger values)
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.8 ? Math.random() * 2 - 1 : 0),
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.8 ? Math.random() * 2 - 1 : 0),
-        // User behavior vectors (binary patterns)
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.5 ? 1 : -1),
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.5 ? 1 : -1),
-        // Random variations of each type
-        Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.15),
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.7 ? Math.random() * 2 - 1 : 0),
-        Array.from({ length: VECTOR_DIMENSION }, () => Math.random() > 0.4 ? 1 : -1),
-    ]);
+// Initialize collections
+const collections = new Map<string, VectorCollection>();
 
-    // Insert samples into the graph and store
-    samples.forEach((vector, index) => {
-        try {
-            const typedVector = toTypedVector(vector);
-            const id = performanceMonitor.measure('insertSampleVector', () => 
-                graph.insert(typedVector)
+function calculateVectorStats(vector: Vector) {
+    const magnitude = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
+    const nonZeroElements = vector.filter(val => Math.abs(val) > 1e-6).length;
+    const sparsity = 1 - (nonZeroElements / vector.length);
+    
+    return {
+        magnitude,
+        sparsity,
+        min: Math.min(...vector),
+        max: Math.max(...vector)
+    };
+}
+
+function initializeCollections() {
+    // Initialize collections with sample data
+    Object.entries(sampleCollections).forEach(([name, vectors]) => {
+        const collection: VectorCollection = {
+            id: name,
+            name: name.charAt(0).toUpperCase() + name.slice(1),
+            description: `Collection of ${name}`,
+            vectors: [],
+            dimension: VECTOR_DIMENSION,
+            created: new Date().toISOString(),
+            updated: new Date().toISOString(),
+            stats: {
+                totalVectors: 0,
+                averageMagnitude: 0,
+                averageSparsity: 0
+            }
+        };
+
+        vectors.forEach(partialVector => {
+            // Generate a sample vector if not provided
+            const vector = Array.from({ length: VECTOR_DIMENSION }, 
+                () => (Math.random() * 2 - 1) * 0.1
             );
-            vectorStore.set(id, vector);
-            logger.debug('Inserted sample vector', { index: String(index), id: String(id) });
-        } catch (error) {
-            logger.error('Failed to insert sample vector', { 
-                index: String(index), 
-                error: error instanceof Error ? error.message : String(error)
-            });
-        }
+
+            const stats = calculateVectorStats(vector);
+            const enhancedVector: EnhancedVector = {
+                vector,
+                metadata: {
+                    ...partialVector.metadata!,
+                    stats
+                }
+            };
+
+            try {
+                const typedVector = toTypedVector(vector);
+                const id = graph.insert(typedVector);
+                vectorStore.set(id, enhancedVector);
+                collection.vectors.push(enhancedVector);
+                
+                // Update collection stats
+                collection.stats.totalVectors++;
+                collection.stats.averageMagnitude = 
+                    (collection.stats.averageMagnitude * (collection.stats.totalVectors - 1) + stats.magnitude) 
+                    / collection.stats.totalVectors;
+                collection.stats.averageSparsity = 
+                    (collection.stats.averageSparsity * (collection.stats.totalVectors - 1) + stats.sparsity) 
+                    / collection.stats.totalVectors;
+            } catch (error) {
+                logger.error('Failed to insert vector into collection', {
+                    collection: name,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+            }
+        });
+
+        collections.set(name, collection);
+        logger.info('Initialized collection', { 
+            name,
+            vectorCount: String(collection.vectors.length)
+        });
     });
+}
 
-    logger.info('Sample vectors generation complete', { count: String(samples.length) });
-    return samples;
-};
+// Initialize collections with sample data
+initializeCollections();
 
-const sampleVectors = generateSampleVectors();
+export async function performVectorSearch(
+    inputVector: Vector, 
+    options: Partial<SearchOptions> = {}
+): Promise<EnhancedSearchResult[]> {
+    const {
+        maxResults = 10,
+        filters
+    } = options;
 
-export async function performVectorSearch(inputVector: Vector, k: number = 10): Promise<SearchResult[]> {
-    const logContext: LogContext = {
+    const logContext = {
         inputVectorLength: String(inputVector.length),
-        k: String(k),
+        maxResults: String(maxResults),
+        filters: filters ? JSON.stringify(filters) : 'none',
         graphStats: JSON.stringify(graph.getStats()),
         storeSize: String(vectorStore.size),
     };
@@ -105,33 +158,58 @@ export async function performVectorSearch(inputVector: Vector, k: number = 10): 
             const queryVector: TypedVector = toTypedVector(inputVector);
             
             // Perform search using HNSW
-            const results = performanceMonitor.measure('hnswSearch', () => 
-                graph.search(queryVector, k)
-            );
+            const startTime = performance.now();
+            const results = graph.search(queryVector, maxResults);
+            const searchTime = performance.now() - startTime;
             
             logger.debug('Raw search results', {
                 numResults: String(results.length),
-                distances: JSON.stringify(results.map(r => r.distance)),
+                searchTime: String(searchTime.toFixed(2)),
             });
 
-            // Map results to include actual vectors from our store
-            const mappedResults = results.map(result => {
-                const vector = vectorStore.get(result.id);
-                if (!vector) {
+            // Map results to include metadata
+            const enhancedResults = results.map(result => {
+                const enhancedVector = vectorStore.get(result.id);
+                if (!enhancedVector) {
                     logger.warn('Vector not found in store', { id: String(result.id) });
+                    return null;
                 }
-                return {
-                    vector: vector || fromTypedVector(queryVector),
-                    similarity: 1 / (1 + result.distance)
+
+                // Apply filters if specified
+                if (filters) {
+                    const { sources, models, labels, dateRange } = filters;
+                    const metadata = enhancedVector.metadata;
+
+                    if (sources && !sources.includes(metadata.source)) return null;
+                    if (models && !models.includes(metadata.model)) return null;
+                    if (labels && !labels.some(label => metadata.labels.includes(label))) return null;
+                    if (dateRange) {
+                        const timestamp = new Date(metadata.timestamp);
+                        const start = new Date(dateRange.start);
+                        const end = new Date(dateRange.end);
+                        if (timestamp < start || timestamp > end) return null;
+                    }
+                }
+
+                const searchResult: EnhancedSearchResult = {
+                    vector: enhancedVector.vector,
+                    metadata: enhancedVector.metadata,
+                    similarity: 1 / (1 + result.distance),
+                    algorithmSpecific: {
+                        distanceMetric: 'euclidean',
+                        searchTime
+                    }
                 };
-            });
+
+                return searchResult;
+            }).filter((result): result is EnhancedSearchResult => result !== null);
 
             logger.info('Search completed successfully', {
-                numResults: String(mappedResults.length),
-                similarities: JSON.stringify(mappedResults.map(r => r.similarity)),
+                numResults: String(enhancedResults.length),
+                searchTime: String(searchTime.toFixed(2)),
             });
 
-            return mappedResults;
+            return enhancedResults;
         } catch (error) {
             logger.error('Vector search failed', { 
                 error: error instanceof Error ? error.message : String(error)
@@ -141,81 +219,36 @@ export async function performVectorSearch(inputVector: Vector, k: number = 10): 
     });
 }
 
-// Export vector templates for the input component
-export const vectorTemplates: VectorTemplates = {
+// Export collections for the input component
+export function getCollections(): VectorCollection[] {
+    return Array.from(collections.values());
+}
+
+// Export vector templates with real-world examples
+export const vectorTemplates = {
     text: {
         title: "Text Embedding",
-        description: "BERT/GPT embeddings for semantic text search",
+        description: "BERT embeddings for semantic text search",
         dimension: VECTOR_DIMENSION,
-        vector: sampleVectors[0]
+        vector: collections.get('textEmbeddings')?.vectors[0]?.vector || 
+                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
     },
     image: {
         title: "Image Feature Vector",
-        description: "ResNet/EfficientNet embeddings for image similarity",
+        description: "CLIP embeddings for image similarity",
         dimension: VECTOR_DIMENSION,
-        vector: sampleVectors[2]
+        vector: collections.get('imageFeatures')?.vectors[0]?.vector ||
+                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
     },
-    user: {
-        title: "User Behavior Vector",
-        description: "Recommendation system embeddings",
+    audio: {
+        title: "Audio Embedding",
+        description: "Wav2Vec embeddings for audio similarity",
         dimension: VECTOR_DIMENSION,
-        vector: sampleVectors[4]
+        vector: collections.get('audioEmbeddings')?.vectors[0]?.vector ||
+                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
     }
 };
 
-// Initialize more random vectors for better search results
-logger.info('Initializing additional random vectors');
-
-function initializeAdditionalVectors(): void {
-    performanceMonitor.measure('initializeAdditionalVectors', () => {
-        // Add 50 more random vectors with various patterns
-        for (let i = 0; i < 50; i++) {
-            const pattern = Math.floor(Math.random() * 3);
-            let vector: Vector;
-            
-            switch (pattern) {
-                case 0: // Text-like
-                    vector = Array.from({ length: VECTOR_DIMENSION }, 
-                        () => (Math.random() * 2 - 1) * 0.1
-                    );
-                    break;
-                case 1: // Image-like
-                    vector = Array.from({ length: VECTOR_DIMENSION }, 
-                        () => Math.random() > 0.8 ? Math.random() * 2 - 1 : 0
-                    );
-                    break;
-                default: // User behavior-like
-                    vector = Array.from({ length: VECTOR_DIMENSION }, 
-                        () => Math.random() > 0.5 ? 1 : -1
-                    );
-            }
-            
-            try {
-                const typedVector = toTypedVector(vector);
-                const id = performanceMonitor.measure('insertAdditionalVector', () =>
-                    graph.insert(typedVector)
-                );
-                vectorStore.set(id, vector);
-                if (i % 10 === 0) {
-                    logger.debug('Additional vectors progress', { count: String(i + 1) });
-                }
-            } catch (error) {
-                logger.error('Failed to insert additional vector', { 
-                    index: String(i),
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            }
-        }
-        logger.info('Additional vectors initialization complete', {
-            graphStats: JSON.stringify(graph.getStats())
-        });
-    });
-}
-
-// Execute initialization
-initializeAdditionalVectors();
-
 // Set performance thresholds
-performanceMonitor.setThreshold('vectorSearch', 50); // 50ms threshold for search
-performanceMonitor.setThreshold('hnswSearch', 30); // 30ms threshold for HNSW search
-performanceMonitor.setThreshold('insertSampleVector', 10); // 10ms threshold for vector insertion
+performanceMonitor.setThreshold('vectorSearch', 50);
+performanceMonitor.setThreshold('calculateVectorStats', 10);

@@ -3,24 +3,26 @@ import { logger } from '../lib/logger';
 import { performanceMonitor } from '../lib/performance';
 import type { 
   Vector,
-  SearchResult, 
   SearchMetrics, 
   SearchState,
   SearchRequestBody,
   SearchResponseBody,
   LogContext
 } from '../types/app';
+import { EnhancedSearchResult } from '../types/vector';
 
 const VECTOR_DIMENSION = Number(process.env.VECTOR_DIMENSION) || 384;
+const MAX_RESULTS = Number(process.env.MAX_SEARCH_RESULTS) || 20;
 
-interface UseVectorSearchReturn extends SearchState {
+interface UseVectorSearchReturn extends Omit<SearchState, 'results'> {
+  results: EnhancedSearchResult[];
   search: (vector: Vector) => Promise<void>;
   reset: () => void;
   getMetrics: () => SearchMetrics;
 }
 
 export function useVectorSearch(): UseVectorSearchReturn {
-  const [state, setState] = useState<SearchState>({
+  const [state, setState] = useState<Omit<SearchState, 'results'> & { results: EnhancedSearchResult[] }>({
     results: [],
     isLoading: false,
     error: null,
@@ -99,16 +101,21 @@ export function useVectorSearch(): UseVectorSearchReturn {
     const startTime = performance.now();
 
     try {
-      const searchResult = await performanceMonitor.measureAsync<SearchResult[]>(
+      const searchResult = await performanceMonitor.measureAsync<EnhancedSearchResult[]>(
         'vector_search_request',
         async () => {
           const logContext: LogContext = {
             vectorLength: String(vector.length),
+            maxResults: String(MAX_RESULTS),
           };
           
           logger.info('Starting vector search request', logContext);
 
-          const requestBody: SearchRequestBody = { vector };
+          const requestBody: SearchRequestBody = { 
+            vector,
+            maxResults: MAX_RESULTS
+          };
+
           const response = await fetch('/api/search', {
             method: 'POST',
             headers: {
@@ -122,7 +129,7 @@ export function useVectorSearch(): UseVectorSearchReturn {
             throw new Error(errorResponse.error || 'Search failed');
           }
 
-          const data = await response.json() as SearchResponseBody;
+          const data = await response.json() as { results: EnhancedSearchResult[] };
           if (!Array.isArray(data.results)) {
             throw new Error('Invalid response format');
           }

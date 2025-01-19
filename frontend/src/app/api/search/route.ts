@@ -8,6 +8,7 @@ import type {
   Vector,
   LogContext
 } from '../../../types/app';
+import { SearchOptions } from '../../../types/vector';
 
 // Validate vector format and dimensions
 function validateVector(vector: unknown): vector is Vector {
@@ -92,14 +93,22 @@ export async function POST(request: Request): Promise<NextResponse<SearchRespons
         return requested;
       });
 
+      // Prepare search options
+      const searchOptions: Partial<SearchOptions> = {
+        maxResults,
+        algorithm: 'hnsw',
+        filters: body.filters
+      };
+
       // Perform search
       logger.info('Initiating vector search', {
         requestId,
         maxResults: String(maxResults),
+        options: JSON.stringify(searchOptions),
       });
 
       const results = await performanceMonitor.measureAsync('search-execution', () =>
-        performVectorSearch(body.vector, maxResults)
+        performVectorSearch(body.vector, searchOptions)
       );
 
       // Log search completion

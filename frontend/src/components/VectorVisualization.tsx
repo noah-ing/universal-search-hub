@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { SearchResult } from '../types/search';
-import type { Data, Layout, Config, Font, PlotMarker } from 'plotly.js';
+import { useState, useEffect, useMemo } from 'react';
+import { EnhancedSearchResult } from '../types/vector';
+import { CustomPlotData, CustomLayout, CustomConfig, PlotType, PlotMode, HoverInfo } from '../types/plotly';
 import { logger } from '../lib/logger';
 import { performanceMonitor } from '../lib/performance';
 import { withErrorBoundary } from './ErrorBoundary';
@@ -10,34 +10,27 @@ import ClientPlot from './ClientPlot';
 
 interface VectorVisualizationProps {
   queryVector: number[];
-  results: SearchResult[];
+  results: EnhancedSearchResult[];
 }
 
-const defaultFont: Partial<Font> = {
+const defaultFont = {
   family: 'Inter, system-ui, sans-serif',
   size: 12,
   color: '#9CA3AF'
-};
+} as const;
 
-type CustomMarker = Partial<PlotMarker> & {
-  colorbar?: {
-    title: string;
-    titleside: 'right';
-    thickness: number;
-    len: number;
-    tickfont: Partial<Font>;
-    titlefont: Partial<Font>;
-  };
-};
+type VisualizationMode = '2d' | '3d' | 'cluster' | 'pca' | 'tsne';
 
 function VectorVisualization({ queryVector, results }: VectorVisualizationProps) {
   const [dimensions, setDimensions] = useState<{ x: number; y: number }>({ x: 0, y: 1 });
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
+  const [viewMode, setViewMode] = useState<VisualizationMode>('2d');
   const [error, setError] = useState<string | null>(null);
   const [containerWidth, setContainerWidth] = useState(800);
+  const [clusterCount, setClusterCount] = useState(3);
+  const [showVectorPaths, setShowVectorPaths] = useState(false);
+  const [showMetadata, setShowMetadata] = useState(true);
 
   useEffect(() => {
-    // Set up responsive width
     const updateWidth = () => {
       const container = document.querySelector('.plot-container');
       if (container) {
@@ -50,8 +43,18 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
       window.addEventListener('resize', updateWidth);
       return () => window.removeEventListener('resize', updateWidth);
     }
-    return () => {}; // Return empty cleanup function for SSR
+    return () => {};
   }, []);
+
+  // Group results by source type for better visualization
+  const groupedResults = useMemo(() => {
+    return results.reduce((acc, result) => {
+      const source = result.metadata.source;
+      if (!acc[source]) acc[source] = [];
+      acc[source].push(result);
+      return acc;
+    }, {} as Record<string, EnhancedSearchResult[]>);
+  }, [results]);
 
   if (!queryVector || !results.length) {
     return (
@@ -60,90 +63,180 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
       </div>
     );
   }
-  
-  // Prepare data for visualization
-  const data: Partial<Data>[] = viewMode === '2d' ? [
-    // Query vector
-    {
-      x: [queryVector[dimensions.x]],
-      y: [queryVector[dimensions.y]],
-      mode: 'markers',
-      type: 'scatter',
-      name: 'Query Vector',
-      marker: {
-        size: 12,
-        color: '#3B82F6',
-        symbol: 'star',
-      } as CustomMarker,
-    },
-    // Result vectors
-    {
-      x: results.map(r => r.vector[dimensions.x]),
-      y: results.map(r => r.vector[dimensions.y]),
-      mode: 'markers',
-      type: 'scatter',
-      name: 'Results',
-      marker: {
-        size: 10,
-        color: results.map(r => r.similarity),
-        colorscale: 'Viridis',
-        showscale: true,
-        colorbar: {
-          title: 'Similarity',
-          titleside: 'right',
-          thickness: 15,
-          len: 0.75,
-          tickfont: defaultFont,
-          titlefont: defaultFont,
-        },
-      } as CustomMarker,
-      text: results.map(r => `Similarity: ${(r.similarity * 100).toFixed(2)}%`),
-      hoverinfo: 'text',
-    },
-  ] : [
-    // 3D visualization
-    {
-      type: 'scatter3d',
-      x: [queryVector[dimensions.x]],
-      y: [queryVector[dimensions.y]],
-      z: [queryVector[dimensions.x + 1] || 0],
-      mode: 'markers',
-      name: 'Query Vector',
-      marker: {
-        size: 8,
-        color: '#3B82F6',
-        symbol: 'diamond',
-      } as CustomMarker,
-    },
-    {
-      type: 'scatter3d',
-      x: results.map(r => r.vector[dimensions.x]),
-      y: results.map(r => r.vector[dimensions.y]),
-      z: results.map(r => r.vector[dimensions.x + 1] || 0),
-      mode: 'markers',
-      name: 'Results',
-      marker: {
-        size: 6,
-        color: results.map(r => r.similarity),
-        colorscale: 'Viridis',
-        showscale: true,
-        colorbar: {
-          title: 'Similarity',
-          titleside: 'right',
-          thickness: 15,
-          len: 0.75,
-          tickfont: defaultFont,
-          titlefont: defaultFont,
-        },
-      } as CustomMarker,
-      text: results.map(r => `Similarity: ${(r.similarity * 100).toFixed(2)}%`),
-      hoverinfo: 'text',
-    },
-  ];
 
-  const layout: Partial<Layout> = {
+  // Prepare hover text with metadata
+  const getHoverText = (result: EnhancedSearchResult) => {
+    const { metadata, similarity } = result;
+    return `
+      Source: ${metadata.source}
+      Model: ${metadata.model}
+      Similarity: ${(similarity * 100).toFixed(2)}%
+      Labels: ${metadata.labels.join(', ')}
+      ${metadata.originalContent ? `Content: ${metadata.originalContent.value.slice(0, 50)}...` : ''}
+    `.trim();
+  };
+  
+  // Prepare data for different visualization modes
+  const data: CustomPlotData[] = (() => {
+    // Common marker settings for results
+    const getResultMarker = (results: EnhancedSearchResult[]) => ({
+      size: 10,
+      color: results.map(r => r.similarity),
+      colorscale: 'Viridis',
+      showscale: true,
+      colorbar: {
+        title: 'Similarity',
+        titleside: 'right',
+        thickness: 15,
+        len: 0.75,
+        tickfont: defaultFont,
+        titlefont: defaultFont,
+      },
+    });
+
+    // Query vector marker
+    const queryMarker = {
+      size: 12,
+      color: '#3B82F6',
+      symbol: 'star',
+    };
+
+    switch (viewMode) {
+      case '2d': {
+        const plotType: PlotType = 'scatter';
+        const plotMode: PlotMode = 'markers';
+        const hoverInfo: HoverInfo = 'text';
+
+        return [
+          // Query vector
+          {
+            x: [queryVector[dimensions.x]],
+            y: [queryVector[dimensions.y]],
+            mode: plotMode,
+            type: plotType,
+            name: 'Query Vector',
+            marker: queryMarker,
+          } as CustomPlotData,
+          // Results by source type
+          ...Object.entries(groupedResults).map(([source, sourceResults]) => ({
+            x: sourceResults.map(r => r.vector[dimensions.x]),
+            y: sourceResults.map(r => r.vector[dimensions.y]),
+            mode: showVectorPaths ? 'lines+markers' as PlotMode : plotMode,
+            type: plotType,
+            name: `${source.charAt(0).toUpperCase()}${source.slice(1)} Vectors`,
+            marker: getResultMarker(sourceResults),
+            text: sourceResults.map(getHoverText),
+            hoverinfo: hoverInfo,
+            line: showVectorPaths ? { color: '#4B5563', width: 1 } : undefined,
+          } as CustomPlotData)),
+        ];
+      }
+
+      case '3d': {
+        const plotType: PlotType = 'scatter3d';
+        const plotMode: PlotMode = 'markers';
+        const hoverInfo: HoverInfo = 'text';
+
+        return [
+          // Query vector
+          {
+            type: plotType,
+            x: [queryVector[dimensions.x]],
+            y: [queryVector[dimensions.y]],
+            z: [queryVector[dimensions.x + 1] || 0],
+            mode: plotMode,
+            name: 'Query Vector',
+            marker: { ...queryMarker, size: 8 },
+          } as CustomPlotData,
+          // Results by source type
+          ...Object.entries(groupedResults).map(([source, sourceResults]) => ({
+            type: plotType,
+            x: sourceResults.map(r => r.vector[dimensions.x]),
+            y: sourceResults.map(r => r.vector[dimensions.y]),
+            z: sourceResults.map(r => r.vector[dimensions.x + 1] || 0),
+            mode: showVectorPaths ? 'lines+markers' as PlotMode : plotMode,
+            name: `${source.charAt(0).toUpperCase()}${source.slice(1)} Vectors`,
+            marker: { ...getResultMarker(sourceResults), size: 6 },
+            text: sourceResults.map(getHoverText),
+            hoverinfo: hoverInfo,
+            line: showVectorPaths ? { color: '#4B5563', width: 1 } : undefined,
+          } as CustomPlotData)),
+        ];
+      }
+
+      case 'cluster': {
+        const plotType: PlotType = 'scatter';
+        const plotMode: PlotMode = 'markers';
+        const hoverInfo: HoverInfo = 'text';
+
+        // Simplified k-means visualization
+        const clusters = results.map(r => Math.floor(r.similarity * clusterCount));
+        return [
+          // Query vector
+          {
+            x: [queryVector[dimensions.x]],
+            y: [queryVector[dimensions.y]],
+            mode: plotMode,
+            type: plotType,
+            name: 'Query Vector',
+            marker: queryMarker,
+          } as CustomPlotData,
+          // Clustered results
+          {
+            x: results.map(r => r.vector[dimensions.x]),
+            y: results.map(r => r.vector[dimensions.y]),
+            mode: plotMode,
+            type: plotType,
+            name: 'Clustered Results',
+            marker: {
+              size: 10,
+              color: clusters,
+              colorscale: 'Viridis',
+              showscale: true,
+              colorbar: {
+                title: 'Cluster',
+                titleside: 'right',
+                thickness: 15,
+                len: 0.75,
+                tickfont: defaultFont,
+                titlefont: defaultFont,
+              },
+            },
+            text: results.map(getHoverText),
+            hoverinfo: hoverInfo,
+          } as CustomPlotData,
+        ];
+      }
+
+      // Placeholder for PCA and t-SNE
+      case 'pca':
+      case 'tsne': {
+        const plotType: PlotType = 'scatter';
+        const plotMode: PlotMode = 'markers';
+        const hoverInfo: HoverInfo = 'text';
+
+        return [
+          {
+            x: results.map(() => Math.random() * 2 - 1),
+            y: results.map(() => Math.random() * 2 - 1),
+            mode: plotMode,
+            type: plotType,
+            name: 'Dimensionality Reduced Vectors',
+            marker: getResultMarker(results),
+            text: results.map(getHoverText),
+            hoverinfo: hoverInfo,
+          } as CustomPlotData,
+        ];
+      }
+
+      default:
+        return [];
+    }
+  })();
+
+  const layout: CustomLayout = {
     title: {
-      text: `${viewMode === '2d' ? '2D' : '3D'} Vector Space Visualization`,
+      text: `Vector Space Visualization (${viewMode.toUpperCase()})`,
       font: defaultFont,
     },
     plot_bgcolor: '#1A1F2A',
@@ -157,24 +250,9 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
       bgcolor: 'rgba(26, 31, 42, 0.8)',
     },
     margin: { t: 50, r: 50, b: 50, l: 50 },
-    hovermode: 'closest' as const,
-    dragmode: viewMode === '3d' ? 'orbit' as const : 'zoom' as const,
-    ...(viewMode === '2d' ? {
-      xaxis: {
-        title: `Dimension ${dimensions.x}`,
-        gridcolor: 'rgba(156, 163, 175, 0.2)',
-        zerolinecolor: 'rgba(156, 163, 175, 0.2)',
-        tickfont: defaultFont,
-        titlefont: defaultFont,
-      },
-      yaxis: {
-        title: `Dimension ${dimensions.y}`,
-        gridcolor: 'rgba(156, 163, 175, 0.2)',
-        zerolinecolor: 'rgba(156, 163, 175, 0.2)',
-        tickfont: defaultFont,
-        titlefont: defaultFont,
-      },
-    } : {
+    hovermode: 'closest',
+    dragmode: viewMode === '3d' ? 'orbit' : 'zoom',
+    ...(viewMode === '3d' ? {
       scene: {
         xaxis: {
           title: `Dimension ${dimensions.x}`,
@@ -200,13 +278,28 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
           eye: { x: 1.5, y: 1.5, z: 1.5 }
         },
       },
+    } : {
+      xaxis: {
+        title: viewMode === '2d' ? `Dimension ${dimensions.x}` : 'Component 1',
+        gridcolor: 'rgba(156, 163, 175, 0.2)',
+        zerolinecolor: 'rgba(156, 163, 175, 0.2)',
+        tickfont: defaultFont,
+        titlefont: defaultFont,
+      },
+      yaxis: {
+        title: viewMode === '2d' ? `Dimension ${dimensions.y}` : 'Component 2',
+        gridcolor: 'rgba(156, 163, 175, 0.2)',
+        zerolinecolor: 'rgba(156, 163, 175, 0.2)',
+        tickfont: defaultFont,
+        titlefont: defaultFont,
+      },
     }),
   };
 
-  const config: Partial<Config> = {
+  const config: CustomConfig = {
     responsive: true,
     displayModeBar: true,
-    modeBarButtonsToRemove: ['lasso2d', 'select2d'] as ('lasso2d' | 'select2d')[],
+    modeBarButtonsToRemove: ['lasso2d', 'select2d'],
   };
 
   const handleDimensionChange = (axis: 'x' | 'y', value: number) => {
@@ -229,35 +322,53 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-4 items-center justify-between">
-        <div className="flex gap-4">
+        {/* Dimension Controls */}
+        {viewMode === '2d' || viewMode === '3d' ? (
+          <div className="flex gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-1">
+                X Dimension
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={queryVector.length - 1}
+                value={dimensions.x}
+                onChange={(e) => handleDimensionChange('x', parseInt(e.target.value))}
+                className="w-20 px-2 py-1 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-400 mb-1">
+                Y Dimension
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={queryVector.length - 1}
+                value={dimensions.y}
+                onChange={(e) => handleDimensionChange('y', parseInt(e.target.value))}
+                className="w-20 px-2 py-1 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
+              />
+            </div>
+          </div>
+        ) : viewMode === 'cluster' ? (
           <div>
             <label className="block text-sm font-medium text-gray-400 mb-1">
-              X Dimension
+              Cluster Count
             </label>
             <input
               type="number"
-              min={0}
-              max={queryVector.length - 1}
-              value={dimensions.x}
-              onChange={(e) => handleDimensionChange('x', parseInt(e.target.value))}
+              min={2}
+              max={10}
+              value={clusterCount}
+              onChange={(e) => setClusterCount(parseInt(e.target.value))}
               className="w-20 px-2 py-1 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-1">
-              Y Dimension
-            </label>
-            <input
-              type="number"
-              min={0}
-              max={queryVector.length - 1}
-              value={dimensions.y}
-              onChange={(e) => handleDimensionChange('y', parseInt(e.target.value))}
-              className="w-20 px-2 py-1 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
-            />
-          </div>
-        </div>
+        ) : null}
 
+        {/* Visualization Controls */}
         <div className="flex gap-2">
           <button
             onClick={() => setViewMode('2d')}
@@ -279,9 +390,62 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
           >
             3D View
           </button>
+          <button
+            onClick={() => setViewMode('cluster')}
+            className={`px-3 py-1 rounded ${
+              viewMode === 'cluster'
+                ? 'bg-blue-600 text-white'
+                : 'bg-[#1A1F2A] text-gray-400 hover:bg-[#252B38]'
+            }`}
+          >
+            Clusters
+          </button>
+          <button
+            onClick={() => setViewMode('pca')}
+            className={`px-3 py-1 rounded ${
+              viewMode === 'pca'
+                ? 'bg-blue-600 text-white'
+                : 'bg-[#1A1F2A] text-gray-400 hover:bg-[#252B38]'
+            }`}
+          >
+            PCA
+          </button>
+          <button
+            onClick={() => setViewMode('tsne')}
+            className={`px-3 py-1 rounded ${
+              viewMode === 'tsne'
+                ? 'bg-blue-600 text-white'
+                : 'bg-[#1A1F2A] text-gray-400 hover:bg-[#252B38]'
+            }`}
+          >
+            t-SNE
+          </button>
         </div>
       </div>
 
+      {/* Additional Options */}
+      <div className="flex gap-4 text-sm">
+        <label className="flex items-center gap-2 text-gray-400">
+          <input
+            type="checkbox"
+            checked={showVectorPaths}
+            onChange={(e) => setShowVectorPaths(e.target.checked)}
+            className="rounded border-gray-700 bg-[#1A1F2A] text-blue-600"
+          />
+          Show Vector Paths
+        </label>
+        <label className="flex items-center gap-2 text-gray-400">
+          <input
+            type="checkbox"
+            checked={showMetadata}
+            onChange={(e) => setShowMetadata(e.target.checked)}
+            className="rounded border-gray-700 bg-[#1A1F2A] text-blue-600"
+          />
+          Show Metadata
+        </label>
+      </div>
+
+      {/* Plot Container */}
       <div className="bg-[#1A1F2A] rounded-lg p-4 shadow-lg plot-container">
         <ClientPlot
           data={data}
@@ -299,11 +463,43 @@ function VectorVisualization({ queryVector, results }: VectorVisualizationProps)
         />
       </div>
 
+      {/* Help Text */}
       <div className="text-sm text-gray-500">
-        Tip: {viewMode === '3d' 
-          ? 'Click and drag to rotate the view. Scroll to zoom.' 
-          : 'Use the zoom and pan tools to explore the vector space.'}
+        {viewMode === '3d' ? (
+          'Click and drag to rotate the view. Scroll to zoom.'
+        ) : viewMode === 'cluster' ? (
+          'Adjust cluster count to see different groupings. Hover over points to see metadata.'
+        ) : viewMode === 'pca' || viewMode === 'tsne' ? (
+          'Dimensionality reduction helps visualize high-dimensional relationships.'
+        ) : (
+          'Use the zoom and pan tools to explore the vector space.'
+        )}
       </div>
+
+      {/* Vector Statistics */}
+      {showMetadata && (
+        <div className="grid grid-cols-3 gap-4 text-sm">
+          {Object.entries(groupedResults).map(([source, sourceResults]) => (
+            <div key={source} className="bg-[#252B38] rounded-lg p-4">
+              <h4 className="font-medium text-gray-300 mb-2 capitalize">{source} Vectors</h4>
+              <div className="space-y-1 text-gray-400">
+                <div>Count: {sourceResults.length}</div>
+                <div>
+                  Avg Similarity: {
+                    (sourceResults.reduce((sum, r) => sum + r.similarity, 0) / sourceResults.length * 100).toFixed(2)
+                  }%
+                </div>
+                <div>
+                  Models: {
+                    Array.from(new Set(sourceResults.map(r => r.metadata.model)))
+                      .join(', ')
+                  }
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { VectorSource, ModelType, EnhancedSearchResult } from './vector';
+
 // Vector Types
 export type Vector = number[];
 export type TypedVector = Float32Array;
@@ -55,10 +57,19 @@ export interface ErrorInfo {
 export interface SearchRequestBody {
   vector: Vector;
   maxResults?: number;
+  filters?: {
+    sources?: VectorSource[];
+    models?: ModelType[];
+    labels?: string[];
+    dateRange?: {
+      start: string;
+      end: string;
+    };
+  };
 }
 
 export interface SearchResponseBody {
-  results: SearchResult[];
+  results: EnhancedSearchResult[];
   error?: string;
   details?: string;
 }
@@ -71,11 +82,11 @@ export interface VectorInputProps {
 
 export interface VectorVisualizationProps {
   queryVector: Vector;
-  results: SearchResult[];
+  results: EnhancedSearchResult[];
 }
 
 export interface SearchResultsProps {
-  results: SearchResult[];
+  results: EnhancedSearchResult[];
 }
 
 export interface LoadingSpinnerProps {
@@ -113,7 +124,7 @@ export interface LogEntry {
 
 // State Types
 export interface SearchState {
-  results: SearchResult[];
+  results: EnhancedSearchResult[];
   isLoading: boolean;
   error: string | null;
   queryVector: Vector | null;
