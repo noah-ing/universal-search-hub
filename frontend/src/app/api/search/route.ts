@@ -16,6 +16,9 @@ const SUPPORTED_DIMENSIONS = Array.from(new Set([
   384 // Include the default dimension
 ])).sort((a, b) => a - b);
 
+// Default max results (consistent with frontend)
+const DEFAULT_MAX_RESULTS = 20;
+
 // Validate vector format and dimensions
 function validateVector(vector: unknown): vector is Vector {
   if (!Array.isArray(vector)) {
@@ -86,14 +89,15 @@ export async function POST(request: Request): Promise<NextResponse<SearchRespons
         );
       }
 
-      // Get max results from request or environment
+      // Get max results from request or environment or default
       const maxResults = performanceMonitor.measure('parse-max-results', () => {
-        const defaultMax = parseInt(process.env.MAX_SEARCH_RESULTS || '10');
-        const requested = body.maxResults ? Math.min(body.maxResults, defaultMax) : defaultMax;
+        const envMax = parseInt(process.env.MAX_SEARCH_RESULTS || String(DEFAULT_MAX_RESULTS));
+        const requested = body.maxResults ? Math.min(body.maxResults, envMax) : envMax;
         logger.debug('Using max results', {
           requestId,
           requested: String(requested),
-          default: String(defaultMax),
+          default: String(DEFAULT_MAX_RESULTS),
+          envValue: process.env.MAX_SEARCH_RESULTS || 'not set',
         });
         return requested;
       });
