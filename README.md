@@ -1,218 +1,171 @@
 # Universal Search Hub
 
-A high-performance vector similarity search engine with HNSW algorithm and WASM SIMD optimization. Find similar items at lightning speed with an intuitive 3D visualization interface.
+High-performance vector similarity search engine leveraging HNSW (Hierarchical Navigable Small World) graph algorithms and WebAssembly SIMD optimizations. Built for efficient vector search operations with rich visualization capabilities.
 
-## Overview
-
-Universal Search Hub transforms your data into vector space and finds similarities at incredible speeds. Whether you're working with images, text, audio, or any other type of data that can be vectorized, this engine helps you discover patterns and relationships that traditional search methods might miss.
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)](https://www.typescriptlang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-14.0-black.svg)](https://nextjs.org/)
+[![WASM](https://img.shields.io/badge/WebAssembly-SIMD-orange.svg)](https://webassembly.org/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## Features
 
-- **Blazing Fast Performance**: 
-  - 2.74ms average search latency
-  - 100% accuracy in similarity matching
-  - Handles millions of vectors efficiently
-  - Real-time search results
+### High-Performance Vector Search
+- **Fast Query Performance**: Average search latency of 2.74ms
+- **SIMD Acceleration**: WebAssembly SIMD optimizations for parallel vector operations
+- **Efficient Memory Management**: Optimized memory usage with configurable index parameters
+- **Distributed Architecture**: Raft consensus for reliable operations
 
-- **Advanced Search Technology**:
-  - HNSW (Hierarchical Navigable Small World) graph for efficient nearest neighbor search
-  - WASM SIMD optimization for vector operations
-  - Normalized vector magnitudes for consistent similarity matching
-  - Configurable index parameters for performance tuning
+### Advanced Vector Processing
+- **Comprehensive Dimension Support**: 
+  - Default vectors (384 dimensions)
+  - CLIP embeddings (768 dimensions)
+  - BERT-large embeddings (1024 dimensions)
+  - OpenAI text-embedding-ada-002 (1536 dimensions)
+  - ResNet features (2048 dimensions)
+  - Dynamic dimension handling
+- **Preprocessing Options**: Vector normalization and standardization
+- **Multiple Input Methods**: File upload, templates, manual input, random generation
+- **Automatic Dimension Detection**: Seamless handling of different vector dimensions
 
-- **Interactive Visualization**:
-  - Real-time 3D visualization of vector space
-  - Dynamic clustering view
-  - Interactive point exploration
-  - Adjustable dimension mapping
-  - 2D/3D view switching
+### Visualization & Analysis
+- **Interactive 3D Visualization**: Real-time vector space exploration
+- **Vector Comparison**:
+  - Side-by-side visualization
+  - Cosine similarity metrics
+  - Euclidean distance calculation
+  - Component-wise comparison
+  - Top contributing dimensions
+- **Performance Benchmarking**: 
+  - Search performance across dimensions
+  - Memory usage patterns
+  - Index build times
+  - Query latency distributions
 
-- **Modern Stack**: 
-  - Next.js frontend with TypeScript
-  - Tailwind CSS for responsive design
-  - React components for modular UI
-  - WebAssembly for high-performance computing
+## System Architecture
 
-- **Distributed System**:
-  - Raft consensus for reliable operations
-  - Automatic leader election
-  - Fault tolerance
-  - Scalable architecture
-
-## How It Works
-
-1. **Vector Transformation**:
-   - Data is converted into high-dimensional vectors
-   - Each dimension represents a specific feature
-   - Vectors are normalized for consistent comparison
-   - SIMD instructions optimize vector operations
-
-2. **Similarity Search**:
-   - HNSW algorithm builds a navigable graph
-   - Efficient nearest neighbor search
-   - Configurable precision vs speed tradeoff
-   - Real-time similarity scoring
-
-3. **Visualization**:
-   - Interactive 3D space exploration
-   - Color-coded similarity scores
-   - Dimension reduction for visualization
-   - Cluster analysis tools
-
-## Project Structure
-
+### Core Components
 ```
 universal-search-hub/
-├── frontend/               # Next.js web interface
+├── src/
+│   ├── search/           # Core search engine
+│   │   ├── hnsw.ts      # HNSW implementation
+│   │   └── vector.ts    # Vector operations
+│   ├── consensus/        # Distributed consensus
+│   │   ├── raft.ts      # Raft protocol implementation
+│   │   └── network.ts   # Network communication
+│   └── wasm/            # WASM modules
+│       └── vector_simd.wat  # SIMD optimizations
+├── frontend/
 │   ├── src/
-│   │   ├── app/           # Next.js app router
-│   │   ├── components/    # React components
-│   │   └── lib/          # Shared utilities
-│   └── public/           # Static assets
-├── src/                  # Core search engine
-│   ├── search/          # HNSW implementation
-│   ├── consensus/       # Raft consensus
-│   ├── wasm/           # WASM SIMD modules
-│   └── utils/          # Utilities
-├── scripts/             # Build and utility scripts
-└── tests/              # Test suites
+│   │   ├── app/         # Next.js application
+│   │   ├── components/  # React components
+│   │   ├── lib/        # Shared utilities
+│   │   └── types/      # TypeScript definitions
+└── scripts/             # Build & deployment
 ```
 
-## Core Components
+### Technology Stack
+- **Frontend**: Next.js 14, TypeScript, Tailwind CSS
+- **Visualization**: Plotly
+- **Core Engine**: WebAssembly, HNSW
+- **State Management**: React Context + Custom Hooks
+- **Build System**: Next.js + SWC
 
-### Vector Search Engine
-- HNSW graph implementation for efficient similarity search
-- WASM SIMD optimization for vector operations
-- Configurable index parameters (M, efConstruction, efSearch)
-- Vector normalization and magnitude handling
+## Performance Metrics
 
-### Distributed System
-- Raft consensus protocol implementation
-- Reliable state replication across nodes
-- Automatic leader election and failure recovery
-- Scalable cluster management
+### Search Performance
+- Query Latency: 2.74ms average
+- Accuracy: 100% for exact nearest neighbor search
+- Configurable precision/speed tradeoff
 
-### Web Interface
-- Interactive vector search UI
-- Real-time search results
-- 3D visualization with dimension controls
-- Responsive design with Tailwind CSS
+### Memory Usage
+- Efficient vector storage
+- Configurable index parameters
+- Smart caching strategies
 
 ## Getting Started
 
-1. Install dependencies:
+### Prerequisites
+- Node.js 18+
+- npm 9+
+
+### Development Setup
 ```bash
-# Install root project dependencies
+# Install dependencies
 npm install
 
-# Install frontend dependencies
-cd frontend
-npm install
-```
-
-2. Set up environment variables:
-```bash
-# Root project
+# Configure environment
 cp .env.example .env
+cp frontend/.env.example frontend/.env.local
 
-# Frontend
-cd frontend
-cp .env.example .env.local
+# Start development servers
+npm run dev          # Backend
+cd frontend && npm run dev  # Frontend
 ```
 
-3. Start the development server:
-```bash
-# Start backend services
-npm run dev
+### Environment Variables
 
-# In another terminal, start frontend
-cd frontend
-npm run dev
+#### Backend
+```env
+NODE_ID=node1
+CLUSTER_PEERS=localhost:3001,localhost:3002
+STORAGE_DIR=./data
+LOG_LEVEL=info
 ```
 
-## Environment Variables
+#### Frontend
+```env
+# Default dimension (can be overridden at runtime)
+NEXT_PUBLIC_VECTOR_DIMENSION=384
+MAX_SEARCH_RESULTS=20
 
-### Backend
-- `NODE_ID`: Unique identifier for each node
-- `CLUSTER_PEERS`: Comma-separated list of peer node addresses
-- `STORAGE_DIR`: Directory for persistent storage
-- `LOG_LEVEL`: Logging verbosity level
-
-### Frontend
-- `VECTOR_DIMENSION`: Dimension of vectors (default: 384)
-- `MAX_SEARCH_RESULTS`: Maximum search results (default: 10)
-- `HNSW_M`: Maximum connections per layer (default: 16)
-- `HNSW_EF_CONSTRUCTION`: Dynamic candidate list size for construction
-- `HNSW_EF_SEARCH`: Dynamic candidate list size for search
-
-## Performance Optimization
-
-### Vector Operations
-- WASM SIMD instructions for parallel processing
-- Optimized distance calculations
-- Efficient memory management
-- Vectorized operations for bulk processing
-
-### Search Algorithm
-- Multi-layer graph structure
-- Logarithmic search complexity
-- Configurable precision/speed tradeoff
-- Cached graph traversal
-
-### Memory Usage
-- Optimized for large-scale indices
-- Efficient vector storage
-- Smart caching strategies
-- Memory-mapped file support
-
-## Development
-
-### Backend Development
-- Implement new search algorithms in `src/search/`
-- Add consensus features in `src/consensus/`
-- Optimize WASM modules in `src/wasm/`
-- Profile and optimize performance
-
-### Frontend Development
-- Add new components in `frontend/src/components/`
-- Modify API routes in `frontend/src/app/api/`
-- Update styles using Tailwind CSS
-- Enhance visualization features
-
-## Deployment
-
-The project is configured for deployment on Vercel:
-
-1. Push your changes to GitHub
-2. Import the project in Vercel Dashboard
-3. Configure environment variables
-4. Deploy
-
-### TypeScript Configuration
-- Target ES2015 or higher for Set iteration support
-- Strict type checking enabled
-- Path aliases configured
-- WebAssembly type definitions included
-
-## Testing
-
-Run the test suites:
-```bash
-# Run all tests
-npm test
-
-# Run specific test suite
-npm test -- tests/search.test.ts
+# HNSW Parameters
+HNSW_M=16
+HNSW_EF_CONSTRUCTION=200
+HNSW_EF_SEARCH=50
 ```
 
-## Real-World Applications
+## Usage
 
-- **E-commerce**: Find similar products based on features
-- **Content Recommendation**: Suggest related articles or media
-- **Image Search**: Find visually similar images
-- **Audio Analysis**: Match similar sound patterns
-- **Scientific Research**: Analyze data patterns
-- **AI/ML Systems**: Organize and search through embeddings
+### Vector Search
+1. Access the main interface at `http://localhost:3000`
+2. Choose input method:
+   - Upload vector file (JSON, CSV)
+   - Use predefined templates
+   - Manual vector input
+   - Random vector generation
+3. Select vector dimension:
+   - 384 (Default)
+   - 768 (CLIP/BERT-base)
+   - 1024 (BERT-large)
+   - 1536 (OpenAI Ada)
+   - 2048 (ResNet)
+4. View search results with:
+   - Similarity scores
+   - 3D visualization
+   - Metadata display
+   - Vector preview
+
+### Vector Comparison
+1. Click any search result to access detailed comparison
+2. View at `http://localhost:3000/vector/[id]/compare?query=[queryId]`
+3. Compare:
+   - Side-by-side visualizations
+   - Similarity metrics
+   - Component contributions
+   - Metadata differences
+
+### Performance Benchmarking
+1. Access benchmark interface at `http://localhost:3000/benchmark`
+2. Configure test parameters:
+   - Vector dimensions
+   - Dataset sizes
+   - Iteration counts
+3. View results:
+   - Performance graphs
+   - Memory usage charts
+   - Response time distributions
+   - Detailed metrics table
 
 ## Contributing
 
@@ -222,21 +175,13 @@ npm test -- tests/search.test.ts
 4. Push to the branch
 5. Create a Pull Request
 
-## Performance Metrics
-
-- Average Search Latency: 2.74ms
-- Search Accuracy: 100%
-- WASM SIMD Optimization: Enabled
-- Memory Usage: Optimized for large-scale indices
-- Query Throughput: Thousands per second
-
 ## License
 
-MIT License - see LICENSE file for details
+MIT License - see [LICENSE](LICENSE) for details.
 
 ## Support
 
-For issues, feature requests, or questions:
+For issues and feature requests:
 1. Check existing issues in the repository
 2. Create a new issue with detailed description
 3. Follow the issue template guidelines
