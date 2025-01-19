@@ -9,9 +9,14 @@ import type {
   SearchResponseBody,
   LogContext
 } from '../types/app';
-import { EnhancedSearchResult } from '../types/vector';
+import { EnhancedSearchResult, vectorTemplates } from '../types/vector';
 
-const VECTOR_DIMENSION = Number(process.env.VECTOR_DIMENSION) || 384;
+// Get all supported dimensions
+const SUPPORTED_DIMENSIONS = Array.from(new Set([
+  ...Object.values(vectorTemplates).map(t => t.dimension),
+  384 // Include the default dimension
+])).sort((a, b) => a - b);
+
 const MAX_RESULTS = Number(process.env.MAX_SEARCH_RESULTS) || 20;
 
 interface UseVectorSearchReturn extends Omit<SearchState, 'results'> {
@@ -72,8 +77,8 @@ export function useVectorSearch(): UseVectorSearchReturn {
         return 'Input must be an array of numbers';
       }
 
-      if (vector.length !== VECTOR_DIMENSION) {
-        return `Vector must have exactly ${VECTOR_DIMENSION} dimensions`;
+      if (!SUPPORTED_DIMENSIONS.includes(vector.length)) {
+        return `Vector dimension ${vector.length} is not supported. Supported dimensions are: ${SUPPORTED_DIMENSIONS.join(', ')}`;
       }
 
       if (!vector.every(n => typeof n === 'number' && !isNaN(n))) {

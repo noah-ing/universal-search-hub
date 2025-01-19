@@ -2,6 +2,7 @@
 
 import './globals.css';
 import { Analytics } from "@vercel/analytics/react";
+import Navigation from '@/components/Navigation';
 
 export default function RootLayout({
   children,
@@ -15,9 +16,12 @@ export default function RootLayout({
         <meta name="description" content="High-performance semantic search engine powered by HNSW algorithm" />
       </head>
       <body className="min-h-screen bg-[#0B0E14] text-white">
-        <main className="container mx-auto px-4 py-8">
-          {children}
-        </main>
+        <div className="container mx-auto px-4 py-8">
+          <Navigation />
+          <main>
+            {children}
+          </main>
+        </div>
         <Analytics />
       </body>
     </html>

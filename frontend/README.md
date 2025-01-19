@@ -4,7 +4,8 @@ A Next.js frontend for high-performance vector similarity search using HNSW algo
 
 ## Features
 
-- Vector similarity search UI with real-time results
+- Multi-dimensional vector similarity search UI with real-time results
+- Support for multiple vector dimensions (384, 768, 1024, 1536, 2048)
 - HNSW algorithm integration for fast nearest neighbor search
 - WASM SIMD optimization for high-performance vector operations
 - TypeScript and Tailwind CSS for robust development
@@ -31,11 +32,20 @@ npm run dev
 
 The following environment variables are required:
 
-- `VECTOR_DIMENSION`: Dimension of the vectors (default: 384)
-- `MAX_SEARCH_RESULTS`: Maximum number of search results to return (default: 10)
+- `NEXT_PUBLIC_VECTOR_DIMENSION`: Default dimension for vectors (384, but supports multiple dimensions)
+- `MAX_SEARCH_RESULTS`: Maximum number of search results to return (default: 20)
 - `HNSW_M`: Maximum number of connections per layer in HNSW graph (default: 16)
 - `HNSW_EF_CONSTRUCTION`: Size of dynamic candidate list for HNSW construction (default: 200)
 - `HNSW_EF_SEARCH`: Size of dynamic candidate list for HNSW search (default: 50)
+
+## Supported Vector Dimensions
+
+The application supports multiple vector dimensions:
+- 384: Default dimension
+- 768: CLIP embeddings, BERT-base, Wav2Vec
+- 1024: BERT-large embeddings
+- 1536: OpenAI text-embedding-ada-002
+- 2048: ResNet image features
 
 ## TypeScript Configuration
 
@@ -99,7 +109,7 @@ After deployment, verify:
 
 1. Environment variables are properly set
 2. API routes are functioning
-3. Vector search is working as expected
+3. Vector search works for all supported dimensions
 4. WASM modules are loading correctly
 
 ## Development
@@ -111,16 +121,25 @@ frontend/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   └── search/
-│   │   │       └── route.ts
+│   │   │   ├── search/
+│   │   │   │   └── route.ts
+│   │   │   └── vectors/
+│   │   │       └── [id]/
+│   │   │           └── route.ts
 │   │   ├── layout.tsx
 │   │   └── page.tsx
 │   ├── components/
 │   │   ├── VectorSearch.tsx
 │   │   ├── VectorInput.tsx
+│   │   ├── VectorVisualization.tsx
 │   │   └── SearchResults.tsx
-│   └── lib/
-│       └── search-service.ts
+│   ├── hooks/
+│   │   └── useVectorSearch.ts
+│   ├── lib/
+│   │   └── search-service.ts
+│   └── types/
+│       ├── vector.ts
+│       └── app.ts
 ├── public/
 ├── scripts/
 │   └── test-deployment.ts
@@ -138,6 +157,7 @@ npm run test-deployment
 This will verify:
 - Environment variables
 - Build process
+- Multi-dimensional support
 - Deployment readiness
 
 ## Performance
@@ -145,6 +165,7 @@ This will verify:
 - Average search latency: 2.74ms
 - Search accuracy: 100%
 - WASM SIMD optimization enabled
+- Efficient handling of multiple vector dimensions
 
 ## Support
 

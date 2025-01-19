@@ -2,11 +2,12 @@
 
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { vectorTemplates } from '../lib/search-service';
+import { vectorTemplates } from '../types/vector';
 import { withErrorBoundary } from './ErrorBoundary';
 import LoadingSpinner, { InlineLoading } from './LoadingSpinner';
 import { logger } from '../lib/logger';
 import { performanceMonitor } from '../lib/performance';
+import type { VectorTemplate } from '../types/app';
 
 interface VectorInputProps {
   onSearch: (vector: number[]) => void;
@@ -15,11 +16,19 @@ interface VectorInputProps {
 
 type InputMethod = 'manual' | 'random' | 'file' | 'template';
 
-const VECTOR_DIMENSION = Number(process.env.NEXT_PUBLIC_VECTOR_DIMENSION) || 384;
+// Get all supported dimensions from vector templates
+const SUPPORTED_DIMENSIONS = Array.from(new Set([
+  ...Object.values(vectorTemplates).map(t => t.dimension),
+  384 // Include the default dimension
+])).sort((a, b) => a - b);
+
+// Default to the smallest supported dimension
+const DEFAULT_DIMENSION = SUPPORTED_DIMENSIONS[0];
 
 function VectorInput({ onSearch, isLoading }: VectorInputProps) {
   const [inputMethod, setInputMethod] = useState<InputMethod>('template');
   const [manualInput, setManualInput] = useState('');
+  const [selectedDimension, setSelectedDimension] = useState(DEFAULT_DIMENSION);
   const [preprocessing, setPreprocessing] = useState<'none' | 'normalize' | 'standardize'>('none');
   const [error, setError] = useState<string | null>(null);
   const [currentVector, setCurrentVector] = useState<number[] | null>(null);
@@ -30,16 +39,14 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
         // Debug logging for validation
         logger.debug('Vector validation:', {
           actualLength: String(vector.length),
-          expectedLength: String(VECTOR_DIMENSION),
           isArray: String(Array.isArray(vector)),
           sampleValues: JSON.stringify(vector.slice(0, 5)),
           lastValues: JSON.stringify(vector.slice(-5)),
-          envValue: process.env.NEXT_PUBLIC_VECTOR_DIMENSION || '',
         });
 
-        // Validate vector dimension with detailed error
-        if (vector.length !== VECTOR_DIMENSION) {
-          throw new Error(`Vector dimension mismatch: got ${vector.length}, expected ${VECTOR_DIMENSION}. First 5 values: [${vector.slice(0, 5).join(', ')}], Last 5 values: [${vector.slice(-5).join(', ')}]`);
+        // Validate vector dimension
+        if (!SUPPORTED_DIMENSIONS.includes(vector.length)) {
+          throw new Error(`Unsupported vector dimension: ${vector.length}. Supported dimensions are: ${SUPPORTED_DIMENSIONS.join(', ')}`);
         }
 
         let processedVector = [...vector];
@@ -170,13 +177,13 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
 
   const generateRandomVector = useCallback(() => {
     return performanceMonitor.measure('generate_random_vector', () => {
-      const vector = Array.from({ length: VECTOR_DIMENSION }, 
+      const vector = Array.from({ length: selectedDimension }, 
         () => Math.random() * 2 - 1
       );
       setCurrentVector(vector);
       return vector;
     });
-  }, []);
+  }, [selectedDimension]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -233,7 +240,7 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
     }
   };
 
-  const handleTemplateSelect = useCallback((template: typeof vectorTemplates[keyof typeof vectorTemplates]) => {
+  const handleTemplateSelect = useCallback((template: VectorTemplate) => {
     try {
       const processedVector = processVector(template.vector);
       onSearch(processedVector);
@@ -288,6 +295,24 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Vector Dimension Selector */}
+        {(inputMethod === 'random' || inputMethod === 'manual') && (
+          <div className="flex gap-4 mb-4">
+            <label className="text-sm text-gray-400">
+              Vector Dimension:
+            </label>
+            <select
+              value={selectedDimension}
+              onChange={(e) => setSelectedDimension(Number(e.target.value))}
+              className="px-3 py-1 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300"
+            >
+              {SUPPORTED_DIMENSIONS.map(dim => (
+                <option key={dim} value={dim}>{dim}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Preprocessing Options */}
         <div className="flex gap-4 mb-4">
           <label className="text-sm text-gray-400">
@@ -307,7 +332,7 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
         {inputMethod === 'manual' && (
           <div>
             <label className="block text-sm text-gray-400 mb-2">
-              Enter {VECTOR_DIMENSION} vector values (comma-separated)
+              Enter {selectedDimension} vector values (comma-separated)
             </label>
             <textarea
               value={manualInput}
@@ -317,23 +342,14 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
               placeholder={`e.g., ${Array(5).fill('0').join(', ')}, ...`}
             />
             <p className="text-sm text-gray-500 mt-1">
-              Current count: {manualInput.split(',').filter(x => x.trim()).length} / {VECTOR_DIMENSION}
+              Current count: {manualInput.split(',').filter(x => x.trim()).length} / {selectedDimension}
             </p>
           </div>
         )}
 
         {inputMethod === 'random' && (
           <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Vector dimension (fixed at {VECTOR_DIMENSION})
-            </label>
             <div className="flex gap-4">
-              <input
-                type="number"
-                value={VECTOR_DIMENSION}
-                disabled
-                className="flex-1 px-3 py-2 rounded bg-[#1A1F2A] border border-gray-700 text-gray-300 opacity-50"
-              />
               <button
                 type="button"
                 onClick={handleDownloadVector}
@@ -367,7 +383,7 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
                   Accepts JSON files with vector array or CSV/TXT with comma-separated values
                 </p>
                 <p className="text-sm text-gray-500">
-                  Vector must have exactly {VECTOR_DIMENSION} dimensions
+                  Supported dimensions: {SUPPORTED_DIMENSIONS.join(', ')}
                 </p>
               </>
             )}
@@ -376,12 +392,17 @@ function VectorInput({ onSearch, isLoading }: VectorInputProps) {
 
         {inputMethod === 'template' && (
           <div className="grid gap-4">
-            {Object.values(vectorTemplates).map((template, index) => (
+            {Object.entries(vectorTemplates).map(([key, template]) => (
               <button
-                key={index}
+                key={key}
                 type="button"
                 disabled={isLoading}
-                onClick={() => handleTemplateSelect(template)}
+                onClick={() => handleTemplateSelect({
+                  title: template.title,
+                  description: template.description,
+                  dimension: template.dimension,
+                  vector: Array.from({ length: template.dimension }, () => Math.random() * 2 - 1)
+                })}
                 className="bg-[#1A1F2A] p-4 rounded-lg border border-gray-800 hover:border-blue-500 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <h4 className="text-white font-medium mb-1">{template.title}</h4>

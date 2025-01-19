@@ -1,7 +1,14 @@
 import { Vector } from './app';
 
 export type VectorSource = 'text' | 'image' | 'audio' | 'custom';
-export type ModelType = 'bert' | 'clip' | 'resnet' | 'wav2vec' | 'custom';
+export type ModelType = 
+  | 'bert' 
+  | 'clip' 
+  | 'resnet' 
+  | 'wav2vec' 
+  | 'custom'
+  | 'bert-large'
+  | 'text-embedding-ada-002';
 
 export interface VectorMetadata {
   id: string;
@@ -66,6 +73,46 @@ export interface EnhancedSearchResult {
     searchTime: number;
   };
 }
+
+// Vector templates for different models
+export const vectorTemplates = {
+  'bert-base': {
+    title: 'BERT Base',
+    description: 'BERT base model embeddings (768 dimensions)',
+    dimension: 768,
+    model: 'bert' as ModelType
+  },
+  'clip': {
+    title: 'CLIP',
+    description: 'OpenAI CLIP image embeddings (768 dimensions)',
+    dimension: 768,
+    model: 'clip' as ModelType
+  },
+  'bert-large': {
+    title: 'BERT Large',
+    description: 'BERT large model embeddings (1024 dimensions)',
+    dimension: 1024,
+    model: 'bert-large' as ModelType
+  },
+  'text-embedding-ada-002': {
+    title: 'OpenAI Ada 002',
+    description: 'OpenAI text-embedding-ada-002 (1536 dimensions)',
+    dimension: 1536,
+    model: 'text-embedding-ada-002' as ModelType
+  },
+  'resnet': {
+    title: 'ResNet',
+    description: 'ResNet image features (2048 dimensions)',
+    dimension: 2048,
+    model: 'resnet' as ModelType
+  },
+  'wav2vec': {
+    title: 'Wav2Vec',
+    description: 'Wav2Vec audio embeddings (768 dimensions)',
+    dimension: 768,
+    model: 'wav2vec' as ModelType
+  }
+};
 
 // Generate a large array of text samples
 const generateTextSamples = (): Partial<EnhancedVector>[] => {

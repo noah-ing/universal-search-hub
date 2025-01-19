@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { EnhancedSearchResult } from '../types/vector';
 import { withErrorBoundary } from './ErrorBoundary';
 import { logger } from '../lib/logger';
@@ -8,9 +9,12 @@ import { performanceMonitor } from '../lib/performance';
 
 interface SearchResultsProps {
   results: EnhancedSearchResult[];
+  queryVectorId?: string;
 }
 
-function SearchResults({ results }: SearchResultsProps) {
+function SearchResults({ results, queryVectorId }: SearchResultsProps) {
+  const router = useRouter();
+
   const stats = useMemo(() => {
     if (!results.length) return null;
 
@@ -49,6 +53,14 @@ function SearchResults({ results }: SearchResultsProps) {
       }
     });
   }, [results]);
+
+  const handleResultClick = (resultId: string) => {
+    if (!queryVectorId) {
+      logger.warn('No query vector ID available for comparison');
+      return;
+    }
+    router.push(`/vector/${resultId}/compare?query=${queryVectorId}`);
+  };
 
   if (!results.length) {
     return (
@@ -148,7 +160,15 @@ function SearchResults({ results }: SearchResultsProps) {
         {results.map((result, index) => (
           <div
             key={index}
-            className="bg-[#252B38] rounded-lg p-4 transition-colors hover:bg-[#2A3241]"
+            className="bg-[#252B38] rounded-lg p-4 transition-colors hover:bg-[#2A3241] cursor-pointer"
+            onClick={() => handleResultClick(result.metadata.id)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                handleResultClick(result.metadata.id);
+              }
+            }}
           >
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-3">
@@ -158,9 +178,14 @@ function SearchResults({ results }: SearchResultsProps) {
                   {(result.similarity * 100).toFixed(2)}% Similar
                 </span>
               </div>
-              <span className="text-gray-400 text-sm">
-                ID: {result.metadata.id}
-              </span>
+              <div className="flex items-center space-x-2">
+                <span className="text-gray-400 text-sm">
+                  ID: {result.metadata.id}
+                </span>
+                <span className="text-xs text-blue-400 hover:text-blue-300">
+                  Click to compare →
+                </span>
+              </div>
             </div>
 
             {/* Metadata Section */}

@@ -8,7 +8,13 @@ import type {
   Vector,
   LogContext
 } from '../../../types/app';
-import { SearchOptions } from '../../../types/vector';
+import { SearchOptions, vectorTemplates } from '../../../types/vector';
+
+// Get all supported dimensions
+const SUPPORTED_DIMENSIONS = Array.from(new Set([
+  ...Object.values(vectorTemplates).map(t => t.dimension),
+  384 // Include the default dimension
+])).sort((a, b) => a - b);
 
 // Validate vector format and dimensions
 function validateVector(vector: unknown): vector is Vector {
@@ -20,9 +26,8 @@ function validateVector(vector: unknown): vector is Vector {
     throw new Error('Vector must contain only numbers');
   }
 
-  const expectedDimension = parseInt(process.env.VECTOR_DIMENSION || '384');
-  if (vector.length !== expectedDimension) {
-    throw new Error(`Vector dimension must be ${expectedDimension}`);
+  if (!SUPPORTED_DIMENSIONS.includes(vector.length)) {
+    throw new Error(`Unsupported vector dimension: ${vector.length}. Supported dimensions are: ${SUPPORTED_DIMENSIONS.join(', ')}`);
   }
 
   return true;

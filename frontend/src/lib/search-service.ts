@@ -9,40 +9,58 @@ import {
   VectorCollection,
   SearchOptions,
   EnhancedSearchResult,
-  sampleCollections
+  sampleCollections,
+  vectorTemplates
 } from '../types/vector';
 import { toTypedVector } from '../types/app';
 import { logger } from './logger';
-import { performanceMonitor } from './performance';
+import { performanceMonitor } from '../lib/performance';
 
-const VECTOR_DIMENSION = parseInt(process.env.VECTOR_DIMENSION || '384');
 const MAX_ELEMENTS = 10000;
 
-// Initialize HNSW graph with configuration
-const config: HNSWConfig = {
-    dimension: VECTOR_DIMENSION,
-    maxElements: MAX_ELEMENTS,
-    M: parseInt(process.env.HNSW_M || '16'),
-    efConstruction: parseInt(process.env.HNSW_EF_CONSTRUCTION || '200'),
-    efSearch: parseInt(process.env.HNSW_EF_SEARCH || '50'),
-    ml: 1 / Math.log(2),
-};
+// Map to store HNSW graphs for different dimensions
+const dimensionGraphs = new Map<number, HNSWGraph>();
+const dimensionVectorStores = new Map<number, Map<number, EnhancedVector>>();
 
-logger.info('Initializing HNSW graph', { config: JSON.stringify(config) });
+// Get all supported dimensions
+const SUPPORTED_DIMENSIONS = Array.from(new Set([
+  ...Object.values(vectorTemplates).map(t => t.dimension),
+  384 // Include the default dimension
+])).sort((a, b) => a - b);
 
-let graph: HNSWGraph;
-try {
-    graph = new HNSWGraph(config);
-    logger.info('HNSW graph initialized successfully');
-} catch (error) {
-    logger.error('Failed to initialize HNSW graph', { error: error instanceof Error ? error.message : String(error) });
-    throw error;
+// Initialize HNSW graphs for each dimension
+function initializeGraphs() {
+    SUPPORTED_DIMENSIONS.forEach(dimension => {
+        const config: HNSWConfig = {
+            dimension,
+            maxElements: MAX_ELEMENTS,
+            M: parseInt(process.env.HNSW_M || '16'),
+            efConstruction: parseInt(process.env.HNSW_EF_CONSTRUCTION || '200'),
+            efSearch: parseInt(process.env.HNSW_EF_SEARCH || '50'),
+            ml: 1 / Math.log(2),
+        };
+
+        logger.info('Initializing HNSW graph', { dimension, config: JSON.stringify(config) });
+
+        try {
+            const graph = new HNSWGraph(config);
+            dimensionGraphs.set(dimension, graph);
+            dimensionVectorStores.set(dimension, new Map());
+            logger.info('HNSW graph initialized successfully', { dimension });
+        } catch (error) {
+            logger.error('Failed to initialize HNSW graph', { 
+                dimension,
+                error: error instanceof Error ? error.message : String(error)
+            });
+            throw error;
+        }
+    });
 }
 
-// Store vectors with their metadata
-const vectorStore = new Map<number, EnhancedVector>();
+// Initialize graphs
+initializeGraphs();
 
-// Initialize collections
+// Store vectors with their metadata
 const collections = new Map<string, VectorCollection>();
 
 function calculateVectorStats(vector: Vector) {
@@ -58,27 +76,50 @@ function calculateVectorStats(vector: Vector) {
     };
 }
 
-function initializeCollections() {
-    // Initialize collections with sample data
-    Object.entries(sampleCollections).forEach(([name, vectors]) => {
-        const collection: VectorCollection = {
-            id: name,
-            name: name.charAt(0).toUpperCase() + name.slice(1),
-            description: `Collection of ${name}`,
-            vectors: [],
-            dimension: VECTOR_DIMENSION,
-            created: new Date().toISOString(),
-            updated: new Date().toISOString(),
-            stats: {
-                totalVectors: 0,
-                averageMagnitude: 0,
-                averageSparsity: 0
+// Generate sample vectors for a specific dimension
+function generateSampleVectors(dimension: number, count: number): Partial<EnhancedVector>[] {
+    return Array.from({ length: count }, (_, i) => ({
+        metadata: {
+            id: `sample-${dimension}-${i + 1}`,
+            source: 'custom',
+            model: 'custom',
+            timestamp: new Date().toISOString(),
+            description: `Sample ${dimension}-dimensional vector ${i + 1}`,
+            labels: ['sample', `dim-${dimension}`],
+            originalContent: {
+                type: 'vector',
+                value: `Sample ${dimension}D vector`
             }
-        };
+        }
+    }));
+}
 
-        vectors.forEach(partialVector => {
-            // Generate a sample vector if not provided
-            const vector = Array.from({ length: VECTOR_DIMENSION }, 
+function initializeCollections() {
+    // Initialize collections with sample data for each dimension
+    SUPPORTED_DIMENSIONS.forEach(dimension => {
+        const collectionName = `vectors${dimension}d`;
+        const sampleCount = 50; // Generate 50 sample vectors for each dimension
+        
+        const samples = generateSampleVectors(dimension, sampleCount);
+        
+        samples.forEach(partialVector => {
+            const collection = collections.get(collectionName) || {
+                id: collectionName,
+                name: `${dimension}D Vectors`,
+                description: `Collection of ${dimension}-dimensional vectors`,
+                vectors: [],
+                dimension,
+                created: new Date().toISOString(),
+                updated: new Date().toISOString(),
+                stats: {
+                    totalVectors: 0,
+                    averageMagnitude: 0,
+                    averageSparsity: 0
+                }
+            };
+
+            // Generate a sample vector
+            const vector = Array.from({ length: dimension }, 
                 () => (Math.random() * 2 - 1) * 0.1
             );
 
@@ -92,6 +133,95 @@ function initializeCollections() {
             };
 
             try {
+                const graph = dimensionGraphs.get(dimension);
+                const vectorStore = dimensionVectorStores.get(dimension);
+                
+                if (!graph || !vectorStore) {
+                    throw new Error(`No graph or store found for dimension ${dimension}`);
+                }
+
+                const typedVector = toTypedVector(vector);
+                const id = graph.insert(typedVector);
+                vectorStore.set(id, enhancedVector);
+                collection.vectors.push(enhancedVector);
+                
+                // Update collection stats
+                collection.stats.totalVectors++;
+                collection.stats.averageMagnitude = 
+                    (collection.stats.averageMagnitude * (collection.stats.totalVectors - 1) + stats.magnitude) 
+                    / collection.stats.totalVectors;
+                collection.stats.averageSparsity = 
+                    (collection.stats.averageSparsity * (collection.stats.totalVectors - 1) + stats.sparsity) 
+                    / collection.stats.totalVectors;
+            } catch (error) {
+                logger.error('Failed to insert vector into collection', {
+                    collection: collectionName,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+            }
+
+            collections.set(collectionName, collection);
+        });
+
+        logger.info('Initialized collection', { 
+            name: collectionName,
+            dimension: String(dimension),
+            vectorCount: String(collections.get(collectionName)?.vectors.length || 0)
+        });
+    });
+
+    // Also initialize the original sample collections
+    Object.entries(sampleCollections).forEach(([name, vectors]) => {
+        vectors.forEach(partialVector => {
+            const modelTemplate = Object.values(vectorTemplates).find(
+                t => t.model === partialVector.metadata?.model
+            );
+            
+            if (!modelTemplate) {
+                logger.warn('No template found for model', { 
+                    model: partialVector.metadata?.model 
+                });
+                return;
+            }
+
+            const dimension = modelTemplate.dimension;
+            const collection = collections.get(name) || {
+                id: name,
+                name: name.charAt(0).toUpperCase() + name.slice(1),
+                description: `Collection of ${name}`,
+                vectors: [],
+                dimension,
+                created: new Date().toISOString(),
+                updated: new Date().toISOString(),
+                stats: {
+                    totalVectors: 0,
+                    averageMagnitude: 0,
+                    averageSparsity: 0
+                }
+            };
+
+            // Generate a sample vector
+            const vector = Array.from({ length: dimension }, 
+                () => (Math.random() * 2 - 1) * 0.1
+            );
+
+            const stats = calculateVectorStats(vector);
+            const enhancedVector: EnhancedVector = {
+                vector,
+                metadata: {
+                    ...partialVector.metadata!,
+                    stats
+                }
+            };
+
+            try {
+                const graph = dimensionGraphs.get(dimension);
+                const vectorStore = dimensionVectorStores.get(dimension);
+                
+                if (!graph || !vectorStore) {
+                    throw new Error(`No graph or store found for dimension ${dimension}`);
+                }
+
                 const typedVector = toTypedVector(vector);
                 const id = graph.insert(typedVector);
                 vectorStore.set(id, enhancedVector);
@@ -111,12 +241,13 @@ function initializeCollections() {
                     error: error instanceof Error ? error.message : String(error)
                 });
             }
+
+            collections.set(name, collection);
         });
 
-        collections.set(name, collection);
         logger.info('Initialized collection', { 
             name,
-            vectorCount: String(collection.vectors.length)
+            vectorCount: String(collections.get(name)?.vectors.length || 0)
         });
     });
 }
@@ -133,6 +264,14 @@ export async function performVectorSearch(
         filters
     } = options;
 
+    const dimension = inputVector.length;
+    const graph = dimensionGraphs.get(dimension);
+    const vectorStore = dimensionVectorStores.get(dimension);
+
+    if (!graph || !vectorStore) {
+        throw new Error(`Unsupported vector dimension: ${dimension}. Supported dimensions are: ${SUPPORTED_DIMENSIONS.join(', ')}`);
+    }
+
     const logContext = {
         inputVectorLength: String(inputVector.length),
         maxResults: String(maxResults),
@@ -145,15 +284,6 @@ export async function performVectorSearch(
 
     return performanceMonitor.measure('vectorSearch', () => {
         try {
-            if (inputVector.length !== VECTOR_DIMENSION) {
-                const error = new Error(`Input vector dimension (${inputVector.length}) does not match expected dimension (${VECTOR_DIMENSION})`);
-                logger.error('Vector dimension mismatch', { 
-                    expected: String(VECTOR_DIMENSION),
-                    received: String(inputVector.length)
-                });
-                throw error;
-            }
-
             // Convert input array to TypedVector
             const queryVector: TypedVector = toTypedVector(inputVector);
             
@@ -223,31 +353,6 @@ export async function performVectorSearch(
 export function getCollections(): VectorCollection[] {
     return Array.from(collections.values());
 }
-
-// Export vector templates with real-world examples
-export const vectorTemplates = {
-    text: {
-        title: "Text Embedding",
-        description: "BERT embeddings for semantic text search",
-        dimension: VECTOR_DIMENSION,
-        vector: collections.get('textEmbeddings')?.vectors[0]?.vector || 
-                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
-    },
-    image: {
-        title: "Image Feature Vector",
-        description: "CLIP embeddings for image similarity",
-        dimension: VECTOR_DIMENSION,
-        vector: collections.get('imageFeatures')?.vectors[0]?.vector ||
-                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
-    },
-    audio: {
-        title: "Audio Embedding",
-        description: "Wav2Vec embeddings for audio similarity",
-        dimension: VECTOR_DIMENSION,
-        vector: collections.get('audioEmbeddings')?.vectors[0]?.vector ||
-                Array.from({ length: VECTOR_DIMENSION }, () => (Math.random() * 2 - 1) * 0.1)
-    }
-};
 
 // Set performance thresholds
 performanceMonitor.setThreshold('vectorSearch', 50);
