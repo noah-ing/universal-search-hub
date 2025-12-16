@@ -62,6 +62,7 @@
         "pino": "^8.11.0",
         "pino-pretty": "^10.0.0",
         "sqlite3": "^5.1.7",
+        "wabt": "^1.0.39",
         "ws": "^8.13.0"
     },
     "devDependencies": {
