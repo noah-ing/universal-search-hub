@@ -1,14 +1,15 @@
 import { Vector } from './app';
 
-export type VectorSource = 'text' | 'image' | 'audio' | 'custom';
-export type ModelType = 
-  | 'bert' 
-  | 'clip' 
-  | 'resnet' 
-  | 'wav2vec' 
+export type VectorSource = 'text' | 'image' | 'audio' | 'custom' | 'backend';
+export type ModelType =
+  | 'bert'
+  | 'clip'
+  | 'resnet'
+  | 'wav2vec'
   | 'custom'
   | 'bert-large'
-  | 'text-embedding-ada-002';
+  | 'text-embedding-ada-002'
+  | 'unknown';
 
 export interface VectorMetadata {
   id: string;

@@ -26,6 +26,10 @@
         "precommit": "lint-staged",
         "start": "npm run validate && node dist/index.js",
         "start:dev": "npm run validate && ts-node-dev --respawn --transpile-only src/index.ts",
+        "start:api": "npm run build:wasm && ts-node src/server.ts",
+        "start:api:dev": "npm run build:wasm && ts-node-dev --respawn --transpile-only src/server.ts",
+        "seed": "ts-node scripts/seed-vectors.ts",
+        "benchmark:api": "ts-node scripts/benchmark-api.ts",
         "start:cluster": "npm run validate && ts-node scripts/start-cluster.ts",
         "benchmark": "npm run validate && ts-node scripts/benchmark.ts",
         "benchmark:cluster": "npm run validate && ts-node scripts/benchmark.ts --cluster",
@@ -62,6 +66,7 @@
         "pino": "^8.11.0",
         "pino-pretty": "^10.0.0",
         "sqlite3": "^5.1.7",
+        "wabt": "^1.0.39",
         "ws": "^8.13.0"
     },
     "devDependencies": {
