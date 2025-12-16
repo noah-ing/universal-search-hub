@@ -9,6 +9,7 @@ import { HNSWGraph } from './search/hnsw';
 import { initSIMD, vectorMetrics } from './search/vector';
 import { HNSWConfig, Vector, SystemError } from './types';
 import { searchLogger } from './utils/logger';
+import { getVectorStore, VectorStore } from './storage/vector-store';
 
 // Server configuration
 const PORT = parseInt(process.env['API_PORT'] || '3001', 10);
@@ -27,7 +28,10 @@ const SUPPORTED_DIMENSIONS = [384, 768, 1024, 1536, 2048];
 
 // HNSW graphs for each dimension
 const graphs = new Map<number, HNSWGraph>();
-const vectorStore = new Map<number, Map<number, { vector: Vector; metadata: Record<string, unknown> }>>();
+const memoryStore = new Map<number, Map<number, { vector: Vector; metadata: Record<string, unknown> }>>();
+
+// SQLite persistence store
+let persistenceStore: VectorStore;
 
 // Server metrics
 const serverMetrics = {
@@ -52,6 +56,11 @@ async function initializeGraphs(): Promise<void> {
         searchLogger.warn('SIMD initialization failed, using JavaScript fallback');
     }
 
+    // Initialize SQLite persistence
+    persistenceStore = getVectorStore();
+    await persistenceStore.initialize();
+    searchLogger.info('SQLite persistence initialized');
+
     for (const dimension of SUPPORTED_DIMENSIONS) {
         const config: HNSWConfig = {
             dimension,
@@ -63,8 +72,27 @@ async function initializeGraphs(): Promise<void> {
         };
 
         graphs.set(dimension, new HNSWGraph(config));
-        vectorStore.set(dimension, new Map());
+        memoryStore.set(dimension, new Map());
         searchLogger.info({ dimension }, 'Initialized HNSW graph');
+
+        // Load existing vectors from SQLite into HNSW graph
+        try {
+            const storedVectors = await persistenceStore.getAllByDimension(dimension);
+            for (const stored of storedVectors) {
+                const graph = graphs.get(dimension)!;
+                const store = memoryStore.get(dimension)!;
+                graph.insert(stored.vector, stored.id);
+                store.set(stored.id, {
+                    vector: stored.vector,
+                    metadata: stored.metadata
+                });
+            }
+            if (storedVectors.length > 0) {
+                searchLogger.info({ dimension, count: storedVectors.length }, 'Loaded vectors from persistence');
+            }
+        } catch (error) {
+            searchLogger.warn({ dimension, error }, 'Failed to load persisted vectors');
+        }
     }
 }
 
@@ -133,7 +161,7 @@ async function handleSearch(
 
         const dimension = body.vector.length;
         const graph = graphs.get(dimension);
-        const store = vectorStore.get(dimension);
+        const store = memoryStore.get(dimension);
 
         if (!graph || !store) {
             return sendError(res, 400, `Unsupported dimension: ${dimension}. Supported: ${SUPPORTED_DIMENSIONS.join(', ')}`);
@@ -201,7 +229,7 @@ async function handleInsert(
 
         const dimension = body.vector.length;
         const graph = graphs.get(dimension);
-        const store = vectorStore.get(dimension);
+        const store = memoryStore.get(dimension);
 
         if (!graph || !store) {
             return sendError(res, 400, `Unsupported dimension: ${dimension}. Supported: ${SUPPORTED_DIMENSIONS.join(', ')}`);
@@ -212,10 +240,15 @@ async function handleInsert(
         const id = graph.insert(insertVector, body.id);
         const insertTime = performance.now() - insertStart;
 
-        // Store metadata
+        // Store in memory
         store.set(id, {
             vector: insertVector,
             metadata: body.metadata || {}
+        });
+
+        // Persist to SQLite (async, non-blocking)
+        persistenceStore.insert(id, dimension, insertVector, body.metadata || {}).catch(err => {
+            searchLogger.warn({ error: err, id }, 'Failed to persist vector');
         });
 
         serverMetrics.insertCount++;
@@ -272,7 +305,7 @@ async function handleBulkInsert(
             try {
                 const dimension = item.vector.length;
                 const graph = graphs.get(dimension);
-                const store = vectorStore.get(dimension);
+                const store = memoryStore.get(dimension);
 
                 if (!graph || !store) {
                     results.push({ id: item.id || -1, success: false, error: `Unsupported dimension: ${dimension}` });
@@ -285,6 +318,11 @@ async function handleBulkInsert(
                 store.set(id, {
                     vector: insertVector,
                     metadata: item.metadata || {}
+                });
+
+                // Persist to SQLite (async)
+                persistenceStore.insert(id, dimension, insertVector, item.metadata || {}).catch(err => {
+                    searchLogger.warn({ error: err, id }, 'Failed to persist vector in bulk');
                 });
 
                 results.push({ id, success: true });
@@ -329,7 +367,7 @@ async function handleDelete(
 ): Promise<void> {
     try {
         const graph = graphs.get(dimension);
-        const store = vectorStore.get(dimension);
+        const store = memoryStore.get(dimension);
 
         if (!graph || !store) {
             return sendError(res, 400, `Unsupported dimension: ${dimension}`);
@@ -337,6 +375,11 @@ async function handleDelete(
 
         graph.delete(id);
         store.delete(id);
+
+        // Delete from SQLite (async)
+        persistenceStore.delete(id, dimension).catch(err => {
+            searchLogger.warn({ error: err, id }, 'Failed to delete vector from persistence');
+        });
 
         sendResponse(res, 200, { success: true, id });
 
@@ -358,7 +401,7 @@ async function handleGetVector(
     dimension: number
 ): Promise<void> {
     try {
-        const store = vectorStore.get(dimension);
+        const store = memoryStore.get(dimension);
 
         if (!store) {
             return sendError(res, 400, `Unsupported dimension: ${dimension}`);
@@ -384,7 +427,7 @@ async function handleGetVector(
 /**
  * Handle metrics request
  */
-function handleMetrics(res: http.ServerResponse): void {
+async function handleMetrics(res: http.ServerResponse): Promise<void> {
     const uptime = (Date.now() - serverMetrics.startTime) / 1000;
     const avgSearchTime = serverMetrics.searchCount > 0
         ? serverMetrics.totalSearchTime / serverMetrics.searchCount
@@ -396,6 +439,14 @@ function handleMetrics(res: http.ServerResponse): void {
     const graphStats: Record<string, unknown> = {};
     for (const [dimension, graph] of graphs) {
         graphStats[`dim_${dimension}`] = graph.getStats();
+    }
+
+    // Get persistence stats
+    let persistenceStats = {};
+    try {
+        persistenceStats = await persistenceStore.getStats();
+    } catch (error) {
+        searchLogger.warn({ error }, 'Failed to get persistence stats');
     }
 
     sendResponse(res, 200, {
@@ -412,6 +463,7 @@ function handleMetrics(res: http.ServerResponse): void {
             vectorOps: vectorMetrics.getMetrics()
         },
         graphs: graphStats,
+        persistence: persistenceStats,
         supportedDimensions: SUPPORTED_DIMENSIONS
     });
 }
@@ -456,7 +508,7 @@ async function handleRequest(
 
         // Metrics
         if (path === '/metrics' && req.method === 'GET') {
-            return handleMetrics(res);
+            return await handleMetrics(res);
         }
 
         // Search
@@ -523,21 +575,23 @@ async function startServer(): Promise<void> {
     });
 
     // Graceful shutdown
-    process.on('SIGTERM', () => {
-        searchLogger.info('Received SIGTERM, shutting down...');
-        server.close(() => {
+    const shutdown = async (signal: string) => {
+        searchLogger.info({ signal }, 'Shutting down...');
+        server.close(async () => {
+            // Close persistence store
+            try {
+                await persistenceStore.close();
+                searchLogger.info('Persistence store closed');
+            } catch (error) {
+                searchLogger.warn({ error }, 'Failed to close persistence store');
+            }
             searchLogger.info('Server closed');
             process.exit(0);
         });
-    });
+    };
 
-    process.on('SIGINT', () => {
-        searchLogger.info('Received SIGINT, shutting down...');
-        server.close(() => {
-            searchLogger.info('Server closed');
-            process.exit(0);
-        });
-    });
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 // Start the server
