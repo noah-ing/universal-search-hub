@@ -163,11 +163,16 @@ npm run start:api
 npm run benchmark:api
 ```
 
-The benchmark tests:
-- Insert latency across dimensions
-- Search latency across dimensions
-- Throughput (operations/second)
-- P50, P95, P99 latencies
+### Example Results (on sample dataset ~200 vectors)
+
+| Operation | Dimension | P50 (ms) | P95 (ms) | Throughput |
+|-----------|-----------|----------|----------|------------|
+| Search    | 384       | 1.66     | 2.08     | ~550 ops/s |
+| Search    | 768       | 1.92     | 2.26     | ~510 ops/s |
+| Search    | 1024      | 2.01     | 2.43     | ~485 ops/s |
+| Insert    | 384       | 2.93     | 35.67    | ~110 ops/s |
+
+*Note: Performance varies with dataset size and hardware. HNSW is approximate nearest neighbor (~95% recall).*
 
 ## Project Structure
 

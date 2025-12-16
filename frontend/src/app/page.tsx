@@ -44,10 +44,10 @@ export default function Home() {
             HNSW algorithm with WASM SIMD optimization
           </div>
           <div className="stats-item">
-            2.74ms average search latency
+            ~2ms P50 search latency
           </div>
           <div className="stats-item">
-            100% search accuracy
+            ~95% recall (approximate NN)
           </div>
         </div>
       </div>
