@@ -26,6 +26,8 @@
         "precommit": "lint-staged",
         "start": "npm run validate && node dist/index.js",
         "start:dev": "npm run validate && ts-node-dev --respawn --transpile-only src/index.ts",
+        "start:api": "npm run build:wasm && ts-node src/server.ts",
+        "start:api:dev": "npm run build:wasm && ts-node-dev --respawn --transpile-only src/server.ts",
         "start:cluster": "npm run validate && ts-node scripts/start-cluster.ts",
         "benchmark": "npm run validate && ts-node scripts/benchmark.ts",
         "benchmark:cluster": "npm run validate && ts-node scripts/benchmark.ts --cluster",
