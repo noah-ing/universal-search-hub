@@ -22,7 +22,7 @@ A working vector similarity search engine with HNSW (Hierarchical Navigable Smal
 ┌─────────────────────────────────────────────────────────────┐
 │                     Next.js Frontend                        │
 │  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │ VectorSearch│  │ Visualization │  │    Benchmark UI    │ │
+│  │ VectorSearch│  │ Visualization│  │    Benchmark UI     │ │
 │  └──────┬──────┘  └──────┬───────┘  └──────────┬──────────┘ │
 └─────────┼────────────────┼─────────────────────┼────────────┘
           │                │                     │
